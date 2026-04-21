@@ -594,6 +594,42 @@ impl<'a> TaskRepository<'a> {
         Ok(())
     }
 
+    pub async fn reap_expired_leases(&self) -> sqlx::Result<Vec<(Uuid, String)>> {
+        let expired_tasks: Vec<(Uuid, String)> = sqlx::query_as(
+            r#"
+            SELECT task_id, lease->>'agent_id' as agent_id
+            FROM tasks
+            WHERE status = 'IN_PROGRESS'
+            AND lease IS NOT NULL
+            AND (lease->>'expires_at')::timestamp with time zone < NOW()
+            FOR UPDATE SKIP LOCKED
+            "#,
+        )
+        .fetch_all(self.pool)
+        .await?;
+
+        for (task_id, _previous_agent_id) in &expired_tasks {
+            sqlx::query(
+                r#"
+                UPDATE tasks
+                SET status = 'READY', lease = NULL,
+                    retry_logic = jsonb_set(
+                        COALESCE(retry_logic, '{}'),
+                        '{attempt_count}',
+                        (COALESCE((retry_logic->>'attempt_count')::int, 0) + 1)::text::jsonb
+                    ),
+                    updated_at = NOW()
+                WHERE task_id = $1
+                "#,
+            )
+            .bind(task_id)
+            .execute(self.pool)
+            .await?;
+        }
+
+        Ok(expired_tasks)
+    }
+
     pub fn run_validation_and_complete(
         pool: Arc<PgPool>,
         task_id: Uuid,
@@ -738,6 +774,45 @@ impl DependencyResolver {
                 .execute(&self.pool)
                 .await?;
             }
+        }
+
+        Ok(())
+    }
+}
+
+pub struct LeaseReaper {
+    pool: PgPool,
+    poll_interval: Duration,
+}
+
+impl LeaseReaper {
+    pub fn new(pool: &PgPool) -> Self {
+        Self {
+            pool: pool.clone(),
+            poll_interval: Duration::from_secs(60),
+        }
+    }
+
+    pub async fn run(self) {
+        let mut interval = tokio::time::interval(self.poll_interval);
+
+        loop {
+            interval.tick().await;
+            if let Err(e) = self.reap_expired_leases().await {
+                eprintln!("Lease reaper error: {}", e);
+            }
+        }
+    }
+
+    async fn reap_expired_leases(&self) -> sqlx::Result<()> {
+        let repo = TaskRepository::new(&self.pool);
+        let reclaimed = repo.reap_expired_leases().await?;
+
+        for (task_id, previous_agent_id) in &reclaimed {
+            println!(
+                "Reclaimed task {} from agent {}",
+                task_id, previous_agent_id
+            );
         }
 
         Ok(())
