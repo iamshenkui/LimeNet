@@ -109,3 +109,81 @@ impl From<Task> for TaskRow {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_tasks_table_accepts_full_task() {
+        let database_url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://chenhui@localhost:5432/postgres".to_string());
+        let pool = sqlx::PgPool::connect(&database_url)
+            .await
+            .expect("Failed to connect to database");
+
+        let task_id = Uuid::new_v4();
+        let parent_id = Uuid::new_v4();
+        let child_id = Uuid::new_v4();
+
+        let task = Task {
+            task_id,
+            status: TaskStatus::Pending,
+            parent_ids: vec![parent_id],
+            child_ids: vec![child_id],
+            payload: Payload {
+                instruction: "Test instruction".to_string(),
+                context_paths: vec!["src/test.rs".to_string()],
+                validation_script: Some("cargo test".to_string()),
+            },
+            lease: Some(Lease {
+                agent_id: "test-agent".to_string(),
+                expires_at: Utc::now(),
+            }),
+            retry_logic: Some(RetryLogic {
+                attempt_count: 0,
+                backoff_until: None,
+            }),
+            topological_level: 1,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO tasks (
+                task_id, status, parent_ids, child_ids, payload,
+                lease, retry_logic, topological_level, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "#,
+        )
+        .bind(task.task_id)
+        .bind(task.status.as_str())
+        .bind(&task.parent_ids)
+        .bind(&task.child_ids)
+        .bind(sqlx::types::Json(&task.payload))
+        .bind(task.lease.as_ref().map(sqlx::types::Json))
+        .bind(task.retry_logic.as_ref().map(sqlx::types::Json))
+        .bind(task.topological_level)
+        .bind(task.created_at)
+        .bind(task.updated_at)
+        .execute(&pool)
+        .await
+        .expect("Failed to insert task");
+
+        let row: (String,) =
+            sqlx::query_as("SELECT status::text FROM tasks WHERE task_id = $1")
+                .bind(task_id)
+                .fetch_one(&pool)
+                .await
+                .expect("Failed to fetch task");
+
+        assert_eq!(row.0, "PENDING");
+
+        sqlx::query("DELETE FROM tasks WHERE task_id = $1")
+            .bind(task_id)
+            .execute(&pool)
+            .await
+            .expect("Failed to clean up test task");
+    }
+}
