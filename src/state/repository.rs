@@ -98,10 +98,10 @@ impl<'a> TaskRepository<'a> {
         }
 
         for &task_id in &task_ids {
-            if !visited.contains(&task_id) {
-                if let Some(msg) = dfs(task_id, &adjacency, &mut visited, &mut rec_stack) {
-                    return Err(BatchError::CycleDetected(msg));
-                }
+            if !visited.contains(&task_id)
+                && let Some(msg) = dfs(task_id, &adjacency, &mut visited, &mut rec_stack)
+            {
+                return Err(BatchError::CycleDetected(msg));
             }
         }
 
@@ -119,9 +119,7 @@ impl<'a> TaskRepository<'a> {
                 0
             };
 
-            if levels.get(&node).is_none() || level > *levels.get(&node).unwrap_or(&0) {
-                levels.insert(node, level);
-            }
+            levels.entry(node).or_insert(level);
 
             if let Some(neighbors) = adjacency.get(&node) {
                 for &neighbor in neighbors {

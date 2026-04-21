@@ -1,3 +1,3 @@
 pub mod repository;
 
-pub use repository::TaskRepository;
+pub use repository::{BatchError, BatchTaskInput, BatchTaskResult, TaskRepository};
