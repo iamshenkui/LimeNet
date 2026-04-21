@@ -187,3 +187,50 @@ mod tests {
             .expect("Failed to clean up test task");
     }
 }
+
+#[cfg(test)]
+mod verify_taskrow {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_fetch_taskrow() {
+        let database_url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://chenhui@localhost:5432/postgres".to_string());
+        let pool = sqlx::PgPool::connect(&database_url)
+            .await
+            .expect("Failed to connect to database");
+
+        let task_id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO tasks (task_id, status, payload)
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(task_id)
+        .bind("PENDING")
+        .bind(sqlx::types::Json(&Payload {
+            instruction: "test".to_string(),
+            context_paths: vec![],
+            validation_script: None,
+        }))
+        .execute(&pool)
+        .await
+        .expect("Failed to insert");
+
+        let row: TaskRow = sqlx::query_as("SELECT * FROM tasks WHERE task_id = $1")
+            .bind(task_id)
+            .fetch_one(&pool)
+            .await
+            .expect("Failed to fetch TaskRow");
+
+        assert_eq!(row.status, TaskStatus::Pending);
+
+        sqlx::query("DELETE FROM tasks WHERE task_id = $1")
+            .bind(task_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+}
