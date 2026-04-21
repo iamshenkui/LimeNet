@@ -3,6 +3,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
+use std::process::Stdio;
+use std::sync::Arc;
+use tokio::process::Command;
 use uuid::Uuid;
 
 pub struct TaskRepository<'a> {
@@ -22,6 +25,18 @@ pub struct BatchTaskResult {
     pub created_task_ids: Vec<Uuid>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct SubmitRequest {
+    pub agent_id: String,
+    pub result_summary: String,
+    pub files_changed: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SubmitResult {
+    pub task_id: Uuid,
+}
+
 #[derive(Debug)]
 pub enum BatchError {
     CycleDetected(String),
@@ -33,6 +48,20 @@ pub enum HeartbeatError {
     TaskNotFound,
     AgentMismatch,
     SqlxError(sqlx::Error),
+}
+
+#[derive(Debug)]
+pub enum SubmitError {
+    TaskNotFound,
+    StatusMismatch,
+    AgentMismatch,
+    SqlxError(sqlx::Error),
+}
+
+impl From<sqlx::Error> for SubmitError {
+    fn from(err: sqlx::Error) -> Self {
+        SubmitError::SqlxError(err)
+    }
 }
 
 impl From<sqlx::Error> for HeartbeatError {
@@ -413,6 +442,183 @@ impl<'a> TaskRepository<'a> {
         .await?;
 
         Ok(())
+    }
+
+    pub async fn submit(
+        &self,
+        task_id: Uuid,
+        agent_id: &str,
+        _result_summary: &str,
+        _files_changed: Vec<String>,
+    ) -> Result<SubmitResult, SubmitError> {
+        let mut tx = self.pool.begin().await?;
+
+        let row: Option<TaskRow> = sqlx::query_as(
+            r#"
+            SELECT * FROM tasks
+            WHERE task_id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(task_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let Some(row) = row else {
+            tx.commit().await?;
+            return Err(SubmitError::TaskNotFound);
+        };
+
+        if row.status != TaskStatus::InProgress {
+            tx.commit().await?;
+            return Err(SubmitError::StatusMismatch);
+        }
+
+        let lease = row.lease.as_ref().ok_or(SubmitError::StatusMismatch)?;
+
+        if lease.agent_id != agent_id {
+            tx.commit().await?;
+            return Err(SubmitError::AgentMismatch);
+        }
+
+        sqlx::query(
+            r#"
+            UPDATE tasks
+            SET status = 'EVALUATING', updated_at = NOW()
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(SubmitResult { task_id })
+    }
+
+    pub async fn complete_task(&self, task_id: Uuid) -> sqlx::Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(
+            r#"
+            UPDATE tasks
+            SET status = 'COMPLETED', lease = NULL, updated_at = NOW()
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        self.resolve_dependencies(task_id).await
+    }
+
+    async fn resolve_dependencies(&self, parent_id: Uuid) -> sqlx::Result<()> {
+        let children = self.pending_children(parent_id).await?;
+
+        for child in children {
+            let parent_ids = &child.parent_ids;
+            let mut all_parents_completed = true;
+
+            for pid in parent_ids {
+                let parent: Option<Task> = self.get(*pid).await?;
+                match parent {
+                    Some(p) if p.status == TaskStatus::Completed => {}
+                    _ => {
+                        all_parents_completed = false;
+                        break;
+                    }
+                }
+            }
+
+            if all_parents_completed {
+                sqlx::query(
+                    r#"
+                    UPDATE tasks
+                    SET status = 'READY', updated_at = NOW()
+                    WHERE task_id = $1
+                    "#,
+                )
+                .bind(child.task_id)
+                .execute(self.pool)
+                .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn backoff_task(&self, task_id: Uuid) -> sqlx::Result<()> {
+        let task = self.get(task_id).await?.ok_or(sqlx::Error::RowNotFound)?;
+
+        let current_attempt = task.retry_logic.as_ref()
+            .map(|r| r.attempt_count)
+            .unwrap_or(0);
+
+        let new_attempt_count = current_attempt + 1;
+        let backoff_minutes = (2_i64).pow(new_attempt_count as u32) * 2;
+        let backoff_minutes = backoff_minutes.min(30);
+        let backoff_until = Utc::now() + chrono::Duration::minutes(backoff_minutes);
+
+        let retry_logic = RetryLogic {
+            attempt_count: new_attempt_count,
+            backoff_until: Some(backoff_until),
+        };
+
+        sqlx::query(
+            r#"
+            UPDATE tasks
+            SET status = 'BACKOFF', lease = NULL, retry_logic = $1, updated_at = NOW()
+            WHERE task_id = $2
+            "#,
+        )
+        .bind(sqlx::types::Json(&retry_logic))
+        .bind(task_id)
+        .execute(self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn run_validation_and_complete(
+        pool: Arc<PgPool>,
+        task_id: Uuid,
+        validation_script: String,
+    ) {
+        let pool_clone = Arc::clone(&pool);
+        tokio::spawn(async move {
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(&validation_script)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await;
+
+            let repo = TaskRepository::new(&pool_clone);
+
+            match output {
+                Ok(output) if output.status.success() => {
+                    if let Err(e) = repo.complete_task(task_id).await {
+                        eprintln!("Failed to complete task {}: {}", task_id, e);
+                    }
+                }
+                Ok(_) => {
+                    if let Err(e) = repo.backoff_task(task_id).await {
+                        eprintln!("Failed to backoff task {}: {}", task_id, e);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Validation script failed for task {}: {}", task_id, e);
+                    if let Err(e) = repo.backoff_task(task_id).await {
+                        eprintln!("Failed to backoff task {}: {}", task_id, e);
+                    }
+                }
+            }
+        });
     }
 }
 
