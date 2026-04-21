@@ -11,8 +11,8 @@ use axum::{
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
-use limenet::state::{BatchError, BatchTaskInput, TaskRepository};
-use limenet::contracts::ClaimRequest;
+use limenet::state::{BatchError, BatchTaskInput, HeartbeatError, TaskRepository};
+use limenet::contracts::{ClaimRequest, HeartbeatRequest};
 
 #[derive(Clone)]
 struct AppState {
@@ -52,6 +52,23 @@ async fn claim_task(
     }
 }
 
+async fn heartbeat_task(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(task_id): axum::extract::Path<uuid::Uuid>,
+    Json(request): Json<HeartbeatRequest>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.renew_lease(task_id, &request.agent_id).await {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(HeartbeatError::TaskNotFound) => StatusCode::NOT_FOUND.into_response(),
+        Err(HeartbeatError::AgentMismatch) => StatusCode::CONFLICT.into_response(),
+        Err(HeartbeatError::SqlxError(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
+                .into_response()
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = std::env::var("DATABASE_URL")
@@ -64,6 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/api/v1/tasks/batch", post(create_tasks_batch))
         .route("/api/v1/tasks/claim", post(claim_task))
+        .route("/api/v1/tasks/:task_id/heartbeat", post(heartbeat_task))
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:3000").await?;
