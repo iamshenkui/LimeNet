@@ -1,0 +1,111 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sqlx::types::Json;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "varchar", rename_all = "SCREAMING_SNAKE_CASE")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TaskStatus {
+    Pending,
+    Ready,
+    InProgress,
+    Evaluating,
+    Backoff,
+    Completed,
+}
+
+impl TaskStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TaskStatus::Pending => "PENDING",
+            TaskStatus::Ready => "READY",
+            TaskStatus::InProgress => "IN_PROGRESS",
+            TaskStatus::Evaluating => "EVALUATING",
+            TaskStatus::Backoff => "BACKOFF",
+            TaskStatus::Completed => "COMPLETED",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Payload {
+    pub instruction: String,
+    #[serde(default)]
+    pub context_paths: Vec<String>,
+    pub validation_script: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Lease {
+    pub agent_id: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryLogic {
+    pub attempt_count: i32,
+    pub backoff_until: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Task {
+    pub task_id: Uuid,
+    pub status: TaskStatus,
+    pub parent_ids: Vec<Uuid>,
+    pub child_ids: Vec<Uuid>,
+    pub payload: Payload,
+    pub lease: Option<Lease>,
+    pub retry_logic: Option<RetryLogic>,
+    pub topological_level: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct TaskRow {
+    pub task_id: Uuid,
+    pub status: TaskStatus,
+    pub parent_ids: Vec<Uuid>,
+    pub child_ids: Vec<Uuid>,
+    pub payload: Json<Payload>,
+    pub lease: Option<Json<Lease>>,
+    pub retry_logic: Option<Json<RetryLogic>>,
+    pub topological_level: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<TaskRow> for Task {
+    fn from(row: TaskRow) -> Self {
+        Self {
+            task_id: row.task_id,
+            status: row.status,
+            parent_ids: row.parent_ids,
+            child_ids: row.child_ids,
+            payload: row.payload.0,
+            lease: row.lease.map(|j| j.0),
+            retry_logic: row.retry_logic.map(|j| j.0),
+            topological_level: row.topological_level,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+impl From<Task> for TaskRow {
+    fn from(task: Task) -> Self {
+        Self {
+            task_id: task.task_id,
+            status: task.status,
+            parent_ids: task.parent_ids,
+            child_ids: task.child_ids,
+            payload: Json(task.payload),
+            lease: task.lease.map(Json),
+            retry_logic: task.retry_logic.map(Json),
+            topological_level: task.topological_level,
+            created_at: task.created_at,
+            updated_at: task.updated_at,
+        }
+    }
+}
