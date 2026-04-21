@@ -11,7 +11,7 @@ use axum::{
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
-use limenet::state::{BatchError, BatchTaskInput, HeartbeatError, TaskRepository};
+use limenet::state::{BatchError, BatchTaskInput, HeartbeatError, SubmitError, SubmitRequest, TaskRepository};
 use limenet::contracts::{ClaimRequest, HeartbeatRequest};
 
 #[derive(Clone)]
@@ -69,6 +69,24 @@ async fn heartbeat_task(
     }
 }
 
+async fn submit_task(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(task_id): axum::extract::Path<uuid::Uuid>,
+    Json(request): Json<SubmitRequest>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.submit(task_id, &request.agent_id, &request.result_summary, request.files_changed).await {
+        Ok(result) => (StatusCode::ACCEPTED, Json(result)).into_response(),
+        Err(SubmitError::TaskNotFound) => StatusCode::NOT_FOUND.into_response(),
+        Err(SubmitError::StatusMismatch) => StatusCode::CONFLICT.into_response(),
+        Err(SubmitError::AgentMismatch) => StatusCode::FORBIDDEN.into_response(),
+        Err(SubmitError::SqlxError(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
+                .into_response()
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = std::env::var("DATABASE_URL")
@@ -82,6 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/tasks/batch", post(create_tasks_batch))
         .route("/api/v1/tasks/claim", post(claim_task))
         .route("/api/v1/tasks/:task_id/heartbeat", post(heartbeat_task))
+        .route("/api/v1/tasks/:task_id/submit", post(submit_task))
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:3000").await?;

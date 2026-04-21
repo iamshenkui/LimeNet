@@ -492,7 +492,16 @@ impl<'a> TaskRepository<'a> {
         .execute(&mut *tx)
         .await?;
 
+        let validation_script = row.payload.0.validation_script.clone();
+
         tx.commit().await?;
+
+        if let Some(script) = validation_script {
+            let pool = Arc::new(self.pool.clone());
+            tokio::spawn(async move {
+                Self::run_validation_and_complete(pool, task_id, script);
+            });
+        }
 
         Ok(SubmitResult { task_id })
     }
@@ -583,7 +592,7 @@ impl<'a> TaskRepository<'a> {
         Ok(())
     }
 
-    pub async fn run_validation_and_complete(
+    pub fn run_validation_and_complete(
         pool: Arc<PgPool>,
         task_id: Uuid,
         validation_script: String,
