@@ -10,8 +10,9 @@ use axum::{
 };
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
 
-use limenet::state::{BatchError, BatchTaskInput, HeartbeatError, SubmitError, SubmitRequest, TaskRepository};
+use limenet::state::{BatchError, BatchTaskInput, DependencyResolver, HeartbeatError, SubmitError, SubmitRequest, TaskRepository};
 use limenet::contracts::{ClaimRequest, HeartbeatRequest};
 
 #[derive(Clone)]
@@ -93,6 +94,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "postgres://chenhui@localhost:5432/postgres".to_string());
 
     let pool = sqlx::PgPool::connect(&database_url).await?;
+
+    let notify = Arc::new(Notify::new());
+    let resolver = DependencyResolver::new(&pool, Arc::clone(&notify));
+    tokio::spawn(async move {
+        resolver.run().await;
+    });
 
     let state = Arc::new(AppState { pool });
 

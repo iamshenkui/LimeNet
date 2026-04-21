@@ -1,11 +1,13 @@
 use crate::contracts::{Lease, Payload, RetryLogic, Task, TaskRow, TaskStatus};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, TimeDelta};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::process::Command;
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 pub struct TaskRepository<'a> {
@@ -628,6 +630,117 @@ impl<'a> TaskRepository<'a> {
                 }
             }
         });
+    }
+}
+
+pub struct DependencyResolver {
+    pool: PgPool,
+    notify: Arc<Notify>,
+    poll_interval: Duration,
+}
+
+impl DependencyResolver {
+    pub fn new(pool: &PgPool, notify: Arc<Notify>) -> Self {
+        Self {
+            pool: pool.clone(),
+            notify,
+            poll_interval: Duration::from_secs(2),
+        }
+    }
+
+    pub async fn run(self) {
+        let mut last_check = Utc::now() - TimeDelta::seconds(5);
+        let mut interval = tokio::time::interval(self.poll_interval);
+
+        loop {
+            tokio::select! {
+                _ = self.notify.notified() => {
+                    if let Err(e) = self.resolve_all(&mut last_check).await {
+                        eprintln!("Dependency resolver error: {}", e);
+                    }
+                }
+                _ = interval.tick() => {
+                    if let Err(e) = self.resolve_all(&mut last_check).await {
+                        eprintln!("Dependency resolver error: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    async fn resolve_all(&self, last_check: &mut DateTime<Utc>) -> sqlx::Result<()> {
+        let now = Utc::now();
+        let completed_tasks = self.get_recently_completed_tasks(*last_check).await?;
+        for task in completed_tasks {
+            self.resolve_dependencies_for_task(task.task_id).await?;
+        }
+        *last_check = now;
+        Ok(())
+    }
+
+    async fn get_recently_completed_tasks(&self, since: DateTime<Utc>) -> sqlx::Result<Vec<Task>> {
+        let rows: Vec<TaskRow> = sqlx::query_as(
+            r#"
+            SELECT * FROM tasks
+            WHERE status = 'COMPLETED' AND updated_at > $1
+            ORDER BY updated_at ASC
+            "#,
+        )
+        .bind(since)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn resolve_dependencies_for_task(&self, parent_id: Uuid) -> sqlx::Result<()> {
+        let children_rows: Vec<TaskRow> = sqlx::query_as(
+            r#"
+            SELECT * FROM tasks
+            WHERE $1 = ANY(parent_ids) AND status = 'PENDING'
+            "#,
+        )
+        .bind(parent_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        for child_row in children_rows {
+            let child: Task = child_row.into();
+            let parent_ids = &child.parent_ids;
+            let mut all_parents_completed = true;
+
+            for pid in parent_ids {
+                let parent_row: Option<TaskRow> = sqlx::query_as(
+                    "SELECT * FROM tasks WHERE task_id = $1"
+                )
+                .bind(pid)
+                .fetch_optional(&self.pool)
+                .await?;
+
+                match parent_row {
+                    Some(row) if row.status == TaskStatus::Completed => {}
+                    _ => {
+                        all_parents_completed = false;
+                        break;
+                    }
+                }
+            }
+
+            if all_parents_completed {
+                sqlx::query(
+                    r#"
+                    UPDATE tasks
+                    SET status = 'READY', updated_at = NOW()
+                    WHERE task_id = $1 AND status = 'PENDING'
+                    "#,
+                )
+                .bind(child.task_id)
+                .execute(&self.pool)
+                .await?;
+            }
+        }
+
+        Ok(())
     }
 }
 
