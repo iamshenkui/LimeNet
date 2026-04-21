@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
-use limenet::state::{BatchError, BatchTaskInput, DependencyResolver, HeartbeatError, LeaseReaper, SubmitError, SubmitRequest, TaskRepository};
+use limenet::state::{BackoffAwakener, BatchError, BatchTaskInput, DependencyResolver, HeartbeatError, LeaseReaper, SubmitError, SubmitRequest, TaskRepository};
 use limenet::contracts::{ClaimRequest, HeartbeatRequest};
 
 #[derive(Clone)]
@@ -104,6 +104,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reaper = LeaseReaper::new(&pool);
     tokio::spawn(async move {
         reaper.run().await;
+    });
+
+    let awakener = BackoffAwakener::new(&pool);
+    tokio::spawn(async move {
+        awakener.run().await;
     });
 
     let state = Arc::new(AppState { pool });

@@ -630,6 +630,36 @@ impl<'a> TaskRepository<'a> {
         Ok(expired_tasks)
     }
 
+    pub async fn wake_backoff_tasks(&self) -> sqlx::Result<Vec<(Uuid, i32)>> {
+        let backoff_tasks: Vec<(Uuid, i32)> = sqlx::query_as(
+            r#"
+            SELECT task_id, COALESCE((retry_logic->>'attempt_count')::int, 0) as attempt_count
+            FROM tasks
+            WHERE status = 'BACKOFF'
+            AND retry_logic IS NOT NULL
+            AND (retry_logic->>'backoff_until')::timestamp with time zone < NOW()
+            FOR UPDATE SKIP LOCKED
+            "#,
+        )
+        .fetch_all(self.pool)
+        .await?;
+
+        for (task_id, _) in &backoff_tasks {
+            sqlx::query(
+                r#"
+                UPDATE tasks
+                SET status = 'READY', updated_at = NOW()
+                WHERE task_id = $1
+                "#,
+            )
+            .bind(task_id)
+            .execute(self.pool)
+            .await?;
+        }
+
+        Ok(backoff_tasks)
+    }
+
     pub fn run_validation_and_complete(
         pool: Arc<PgPool>,
         task_id: Uuid,
@@ -812,6 +842,45 @@ impl LeaseReaper {
             println!(
                 "Reclaimed task {} from agent {}",
                 task_id, previous_agent_id
+            );
+        }
+
+        Ok(())
+    }
+}
+
+pub struct BackoffAwakener {
+    pool: PgPool,
+    poll_interval: Duration,
+}
+
+impl BackoffAwakener {
+    pub fn new(pool: &PgPool) -> Self {
+        Self {
+            pool: pool.clone(),
+            poll_interval: Duration::from_secs(30),
+        }
+    }
+
+    pub async fn run(self) {
+        let mut interval = tokio::time::interval(self.poll_interval);
+
+        loop {
+            interval.tick().await;
+            if let Err(e) = self.wake_backoff_tasks().await {
+                eprintln!("Backoff awakener error: {}", e);
+            }
+        }
+    }
+
+    async fn wake_backoff_tasks(&self) -> sqlx::Result<()> {
+        let repo = TaskRepository::new(&self.pool);
+        let awakened = repo.wake_backoff_tasks().await?;
+
+        for (task_id, attempt_count) in &awakened {
+            println!(
+                "Awakened task {} (attempt_count={})",
+                task_id, attempt_count
             );
         }
 
