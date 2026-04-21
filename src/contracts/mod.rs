@@ -1,3 +1,3 @@
 mod task;
 
-pub use task::{Lease, Payload, RetryLogic, Task, TaskRow, TaskStatus};
+pub use task::{ClaimRequest, Lease, Payload, RetryLogic, Task, TaskRow, TaskStatus};

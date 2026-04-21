@@ -48,6 +48,13 @@ pub struct RetryLogic {
     pub backoff_until: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClaimRequest {
+    pub agent_id: String,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub task_id: Uuid,
