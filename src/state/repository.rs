@@ -28,6 +28,19 @@ pub enum BatchError {
     SqlxError(sqlx::Error),
 }
 
+#[derive(Debug)]
+pub enum HeartbeatError {
+    TaskNotFound,
+    AgentMismatch,
+    SqlxError(sqlx::Error),
+}
+
+impl From<sqlx::Error> for HeartbeatError {
+    fn from(err: sqlx::Error) -> Self {
+        HeartbeatError::SqlxError(err)
+    }
+}
+
 impl From<sqlx::Error> for BatchError {
     fn from(err: sqlx::Error) -> Self {
         BatchError::SqlxError(err)
@@ -363,6 +376,43 @@ impl<'a> TaskRepository<'a> {
             .execute(self.pool)
             .await
             .map(|_| ())
+    }
+
+    pub async fn renew_lease(
+        &self,
+        task_id: Uuid,
+        agent_id: &str,
+    ) -> Result<(), HeartbeatError> {
+        let task = self.get(task_id).await?.ok_or(HeartbeatError::TaskNotFound)?;
+
+        if task.status != TaskStatus::InProgress {
+            return Err(HeartbeatError::TaskNotFound);
+        }
+
+        let lease = task.lease.as_ref().ok_or(HeartbeatError::TaskNotFound)?;
+
+        if lease.agent_id != agent_id {
+            return Err(HeartbeatError::AgentMismatch);
+        }
+
+        let new_expires_at = Utc::now() + chrono::Duration::minutes(15);
+
+        sqlx::query(
+            r#"
+            UPDATE tasks
+            SET lease = $1, updated_at = NOW()
+            WHERE task_id = $2
+            "#,
+        )
+        .bind(sqlx::types::Json(&Lease {
+            agent_id: agent_id.to_string(),
+            expires_at: new_expires_at,
+        }))
+        .bind(task_id)
+        .execute(self.pool)
+        .await?;
+
+        Ok(())
     }
 }
 

@@ -55,6 +55,11 @@ pub struct ClaimRequest {
     pub capabilities: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct HeartbeatRequest {
+    pub agent_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub task_id: Uuid,
