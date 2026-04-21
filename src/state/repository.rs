@@ -686,4 +686,57 @@ mod tests {
             _ => panic!("Expected CycleDetected error"),
         }
     }
+
+    #[tokio::test]
+    async fn test_renew_lease_success() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let mut task = test_task("renew_lease_success");
+        task.status = TaskStatus::InProgress;
+        let expires_at = Utc::now() + chrono::Duration::minutes(5);
+        task.lease = Some(Lease {
+            agent_id: "agent-1".to_string(),
+            expires_at,
+        });
+        repo.insert(&task).await.unwrap();
+
+        let result = repo.renew_lease(task.task_id, "agent-1").await;
+        assert!(result.is_ok());
+
+        let fetched = repo.get(task.task_id).await.unwrap().unwrap();
+        assert!(fetched.lease.is_some());
+        let new_expires = fetched.lease.unwrap().expires_at;
+        assert!(new_expires > expires_at);
+
+        repo.delete(task.task_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_renew_lease_task_not_found() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let result = repo.renew_lease(Uuid::new_v4(), "agent-1").await;
+        assert!(matches!(result, Err(HeartbeatError::TaskNotFound)));
+    }
+
+    #[tokio::test]
+    async fn test_renew_lease_agent_mismatch() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let mut task = test_task("renew_lease_agent_mismatch");
+        task.status = TaskStatus::InProgress;
+        task.lease = Some(Lease {
+            agent_id: "agent-1".to_string(),
+            expires_at: Utc::now() + chrono::Duration::minutes(5),
+        });
+        repo.insert(&task).await.unwrap();
+
+        let result = repo.renew_lease(task.task_id, "agent-2").await;
+        assert!(matches!(result, Err(HeartbeatError::AgentMismatch)));
+
+        repo.delete(task.task_id).await.unwrap();
+    }
 }
