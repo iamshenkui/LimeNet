@@ -76,7 +76,7 @@ http://127.0.0.1:3000
 - `200 OK`: 返回完整任务对象
 - `204 No Content`: 当前无可用任务
 
-## `POST /api/v1/tasks/:task_id/heartbeat`
+## `POST /api/v1/tasks/{task_id}/heartbeat`
 
 续租一个正在执行中的任务。
 
@@ -101,7 +101,7 @@ http://127.0.0.1:3000
 - `404 Not Found`: 任务不存在，或当前不在 `IN_PROGRESS`
 - `409 Conflict`: `agent_id` 与当前租约不匹配
 
-## `POST /api/v1/tasks/:task_id/submit`
+## `POST /api/v1/tasks/{task_id}/submit`
 
 提交任务结果并触发异步校验。
 
@@ -134,6 +134,22 @@ http://127.0.0.1:3000
 - `404 Not Found`: 任务不存在
 - `409 Conflict`: 任务状态不允许提交
 - `403 Forbidden`: 当前 Agent 不是租约持有者
+
+## Hermes Integration Notes
+
+对于 Hermes 这类外部 worker / control-plane 客户端，当前推荐的最小交互顺序是：
+
+1. 使用 `POST /api/v1/tasks/batch` 写入一个任务图
+2. worker 使用 `POST /api/v1/tasks/claim` 申领 `READY` 任务
+3. 长任务周期性调用 `POST /api/v1/tasks/{task_id}/heartbeat` 续租
+4. 完成实现后调用 `POST /api/v1/tasks/{task_id}/submit` 进入 `EVALUATING`
+5. 在 `EVALUATING` 阶段调用 Quartermaster，根据 review verdict 决定完成、重试或拆分
+
+补充说明：
+
+- 文档中的 `{task_id}` 是路径参数占位符，实际请求时需要替换成具体 UUID
+- `capabilities` 字段已经接收，但当前实现尚未参与筛选逻辑
+- LimeNet 负责任务状态与租约语义，Quartermaster 只负责返回 review verdict
 
 ## 响应说明
 
