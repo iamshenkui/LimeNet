@@ -116,8 +116,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/api/v1/tasks/batch", post(create_tasks_batch))
         .route("/api/v1/tasks/claim", post(claim_task))
-        .route("/api/v1/tasks/:task_id/heartbeat", post(heartbeat_task))
-        .route("/api/v1/tasks/:task_id/submit", post(submit_task))
+        .route("/api/v1/tasks/{task_id}/heartbeat", post(heartbeat_task))
+        .route("/api/v1/tasks/{task_id}/submit", post(submit_task))
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:3000").await?;
