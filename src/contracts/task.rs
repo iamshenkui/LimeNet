@@ -183,12 +183,11 @@ mod tests {
         .await
         .expect("Failed to insert task");
 
-        let row: (String,) =
-            sqlx::query_as("SELECT status::text FROM tasks WHERE task_id = $1")
-                .bind(task_id)
-                .fetch_one(&pool)
-                .await
-                .expect("Failed to fetch task");
+        let row: (String,) = sqlx::query_as("SELECT status::text FROM tasks WHERE task_id = $1")
+            .bind(task_id)
+            .fetch_one(&pool)
+            .await
+            .expect("Failed to fetch task");
 
         assert_eq!(row.0, "PENDING");
 

@@ -44,18 +44,14 @@ impl EvidenceRollup {
         // An evidence rollup with evidence_count=0 is semantically
         // meaningless — the count describes packaged artifacts in transit
         if let Some(0) = self.evidence_count {
-            return Err(
-                "evidence_count must be at least 1 when set".to_string(),
-            );
+            return Err("evidence_count must be at least 1 when set".to_string());
         }
 
         // An empty summary violates the summary-sized contract:
         // the summary field must carry meaningful content when present
         if let Some(ref s) = self.summary {
             if s.trim().is_empty() {
-                return Err(
-                    "summary must not be empty when set".to_string(),
-                );
+                return Err("summary must not be empty when set".to_string());
             }
         }
 
@@ -106,7 +102,10 @@ mod tests {
             "evidence_count":2
         }"#;
         let rollup: EvidenceRollup = serde_json::from_str(json).unwrap();
-        assert_eq!(rollup.summary, Some("Review evidence for sprint-42".to_string()));
+        assert_eq!(
+            rollup.summary,
+            Some("Review evidence for sprint-42".to_string())
+        );
         let refs = rollup.artifact_refs.unwrap();
         assert_eq!(refs.len(), 2);
         assert_eq!(refs[0], "https://artifacts.example.com/ev-001");
@@ -130,7 +129,10 @@ mod tests {
         let json = serde_json::to_string(&rollup).unwrap();
         let deserialized: EvidenceRollup = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.evidence_rollup_id, Some("er-001".to_string()));
-        assert_eq!(deserialized.summary, Some("Review evidence for sprint-42".to_string()));
+        assert_eq!(
+            deserialized.summary,
+            Some("Review evidence for sprint-42".to_string())
+        );
         let refs = deserialized.artifact_refs.unwrap();
         assert_eq!(refs[0], "https://artifacts.example.com/ev-001");
         assert_eq!(refs[1], "ev-002");
@@ -161,9 +163,7 @@ mod tests {
         let rollup = EvidenceRollup {
             evidence_rollup_id: Some("er-001".to_string()),
             summary: Some("Review evidence for sprint-42".to_string()),
-            artifact_refs: Some(vec![
-                "https://artifacts.example.com/ev-001".to_string(),
-            ]),
+            artifact_refs: Some(vec!["https://artifacts.example.com/ev-001".to_string()]),
             source_domain: Some("task-graph".to_string()),
             evidence_count: Some(1),
             delivery_id: Some("del-001".to_string()),
@@ -287,10 +287,7 @@ mod tests {
         // The evidence rollup validates with only optional fields,
         // without requiring any local subtask details from either the
         // source or target domain.
-        let variants = [
-            None,
-            Some("Summary only".to_string()),
-        ];
+        let variants = [None, Some("Summary only".to_string())];
         for summary in &variants {
             let rollup = EvidenceRollup {
                 evidence_rollup_id: None,

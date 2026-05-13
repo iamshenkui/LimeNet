@@ -40,16 +40,14 @@ impl DelegationContract {
         // Upstream identity anchor: a work request must be traceable to a backend
         if self.upstream_work_request_id.is_some() && self.upstream_backend_id.is_none() {
             return Err(
-                "upstream_backend_id is required when upstream_work_request_id is set"
-                    .to_string(),
+                "upstream_backend_id is required when upstream_work_request_id is set".to_string(),
             );
         }
 
         // Upstream identity anchor: a task must belong to a work request
         if self.upstream_task_id.is_some() && self.upstream_work_request_id.is_none() {
             return Err(
-                "upstream_work_request_id is required when upstream_task_id is set"
-                    .to_string(),
+                "upstream_work_request_id is required when upstream_task_id is set".to_string(),
             );
         }
 
@@ -106,9 +104,15 @@ mod tests {
         let json = serde_json::to_string(&contract).unwrap();
         let deserialized: DelegationContract = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.delegation_id, Some("del-001".to_string()));
-        assert_eq!(deserialized.upstream_work_request_id, Some("wr-001".to_string()));
+        assert_eq!(
+            deserialized.upstream_work_request_id,
+            Some("wr-001".to_string())
+        );
         assert_eq!(deserialized.upstream_task_id, Some("task-001".to_string()));
-        assert_eq!(deserialized.upstream_backend_id, Some("backend-alpha".to_string()));
+        assert_eq!(
+            deserialized.upstream_backend_id,
+            Some("backend-alpha".to_string())
+        );
         assert_eq!(deserialized.downstream_domain_kind, "graph");
         assert_eq!(deserialized.downstream_graph_id, Some("g-001".to_string()));
     }

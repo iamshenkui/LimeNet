@@ -1,19 +1,19 @@
 pub mod contracts;
 pub mod state;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::post,
-    Json, Router,
-};
+use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
-use limenet::state::{BackoffAwakener, BatchError, BatchTaskInput, DependencyResolver, HeartbeatError, LeaseReaper, SubmitError, SubmitRequest, TaskRepository};
-use limenet::contracts::{BackendKind, ClaimRequest, DelegationContract, DeliveryPackage, DeliveryStatus, EvidenceRollup, HeartbeatRequest, Ownership, OwnershipMode, PackageType};
+use limenet::contracts::{
+    BackendKind, ClaimRequest, DelegationContract, DeliveryPackage, DeliveryStatus, EvidenceRollup,
+    HeartbeatRequest, Ownership, OwnershipMode, PackageType,
+};
+use limenet::state::{
+    BackoffAwakener, BatchError, BatchTaskInput, DependencyResolver, HeartbeatError, LeaseReaper,
+    SubmitError, SubmitRequest, TaskRepository,
+};
 
 #[derive(Clone)]
 struct AppState {
@@ -27,13 +27,16 @@ async fn create_tasks_batch(
     let repo = TaskRepository::new(&state.pool);
     match repo.insert_batch(tasks).await {
         Ok(result) => (StatusCode::CREATED, Json(result)).into_response(),
-        Err(BatchError::CycleDetected(msg)) => {
-            (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response()
-        }
-        Err(BatchError::SqlxError(e)) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
-                .into_response()
-        }
+        Err(BatchError::CycleDetected(msg)) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response(),
+        Err(BatchError::SqlxError(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -46,10 +49,11 @@ async fn claim_task(
     match repo.claim_ready(&request.agent_id, expires_at).await {
         Ok(Some(task)) => (StatusCode::OK, Json(task)).into_response(),
         Ok(None) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
-                .into_response()
-        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -63,10 +67,11 @@ async fn heartbeat_task(
         Ok(()) => StatusCode::OK.into_response(),
         Err(HeartbeatError::TaskNotFound) => StatusCode::NOT_FOUND.into_response(),
         Err(HeartbeatError::AgentMismatch) => StatusCode::CONFLICT.into_response(),
-        Err(HeartbeatError::SqlxError(e)) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
-                .into_response()
-        }
+        Err(HeartbeatError::SqlxError(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -76,15 +81,24 @@ async fn submit_task(
     Json(request): Json<SubmitRequest>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.submit(task_id, &request.agent_id, &request.result_summary, request.files_changed).await {
+    match repo
+        .submit(
+            task_id,
+            &request.agent_id,
+            &request.result_summary,
+            request.files_changed,
+        )
+        .await
+    {
         Ok(result) => (StatusCode::ACCEPTED, Json(result)).into_response(),
         Err(SubmitError::TaskNotFound) => StatusCode::NOT_FOUND.into_response(),
         Err(SubmitError::StatusMismatch) => StatusCode::CONFLICT.into_response(),
         Err(SubmitError::AgentMismatch) => StatusCode::FORBIDDEN.into_response(),
-        Err(SubmitError::SqlxError(e)) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
-                .into_response()
-        }
+        Err(SubmitError::SqlxError(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -98,9 +112,11 @@ pub fn delegation_ingest_logic(contract: DelegationContract) -> impl IntoRespons
             });
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
-        Err(msg) => {
-            (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response()
-        }
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response(),
     }
 }
 
@@ -121,9 +137,11 @@ pub fn delivery_package_ingest_logic(pkg: DeliveryPackage) -> impl IntoResponse 
             });
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
-        Err(msg) => {
-            (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response()
-        }
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response(),
     }
 }
 
@@ -137,9 +155,11 @@ pub fn evidence_rollup_ingest_logic(rollup: EvidenceRollup) -> impl IntoResponse
             });
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
-        Err(msg) => {
-            (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response()
-        }
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response(),
     }
 }
 
@@ -157,15 +177,22 @@ pub fn delivery_status_ingest_logic(status: DeliveryStatus) -> impl IntoResponse
 pub fn ownership_ingest_logic(ownership: Ownership) -> impl IntoResponse {
     match ownership.validate() {
         Ok(()) => {
-            let response = serde_json::json!({
+            let promoted_from = ownership.promoted_from.as_deref();
+            let mut response = serde_json::json!({
                 "status": "accepted",
                 "ownership_mode": ownership.ownership_mode,
             });
+            // Include lineage reference when promotion is evaluated
+            if ownership.ownership_mode == Some(OwnershipMode::Promotion) {
+                response["promoted_from"] = serde_json::json!(promoted_from);
+            }
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
-        Err(msg) => {
-            (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response()
-        }
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response(),
     }
 }
 
@@ -253,8 +280,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::Response;
     use axum::body::Body;
+    use axum::http::Response;
     use http_body_util::BodyExt;
 
     /// Convert a `Response<Body>` into a JSON value for assertion convenience.
@@ -330,7 +357,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
         assert!(
-            body["error"].as_str().unwrap().contains("upstream_backend_id"),
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("upstream_backend_id"),
             "expected error about missing upstream_backend_id, got: {:?}",
             body["error"]
         );
@@ -350,7 +380,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
         assert!(
-            body["error"].as_str().unwrap().contains("upstream_work_request_id"),
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("upstream_work_request_id"),
             "expected error about missing upstream_work_request_id, got: {:?}",
             body["error"]
         );
@@ -370,7 +403,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
         assert!(
-            body["error"].as_str().unwrap().contains("downstream_domain_kind"),
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("downstream_domain_kind"),
             "expected error about empty downstream_domain_kind, got: {:?}",
             body["error"]
         );
@@ -555,6 +591,36 @@ mod tests {
         let body = body_to_json(response).await;
         assert_eq!(body["status"], "accepted");
         assert_eq!(body["ownership_mode"], "promotion");
+        assert_eq!(body["promoted_from"], "task-001");
+    }
+
+    #[tokio::test]
+    async fn test_promotion_ownership_ingest_includes_lineage() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Promotion),
+            backend_kind: Some(BackendKind::Task),
+            promoted_from: Some("graph-node-42".into()),
+        };
+        let response = ownership_ingest_logic(ownership).into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body_to_json(response).await;
+        assert_eq!(body["promoted_from"], "graph-node-42");
+        // Canonical/mirror should NOT include promoted_from
+    }
+
+    #[tokio::test]
+    async fn test_canonical_ownership_ingest_excludes_lineage() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Canonical),
+            backend_kind: Some(BackendKind::Task),
+            promoted_from: None,
+        };
+        let response = ownership_ingest_logic(ownership).into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body_to_json(response).await;
+        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["ownership_mode"], "canonical");
+        assert!(body.get("promoted_from").is_none());
     }
 
     #[tokio::test]

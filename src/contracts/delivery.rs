@@ -114,9 +114,7 @@ impl DeliveryPackage {
         // A delivery package with artifact_count=0 is semantically
         // meaningless — the count describes packaged artifacts in transit
         if let Some(0) = self.artifact_count {
-            return Err(
-                "artifact_count must be at least 1 when set".to_string(),
-            );
+            return Err("artifact_count must be at least 1 when set".to_string());
         }
 
         Ok(())
@@ -192,9 +190,15 @@ mod tests {
         assert_eq!(deserialized.source_domain, Some("task-graph".to_string()));
         assert_eq!(deserialized.target_domain, Some("human-review".to_string()));
         assert_eq!(deserialized.package_type, PackageType::Batch);
-        assert_eq!(deserialized.delegation_contract_id, Some("dc-001".to_string()));
+        assert_eq!(
+            deserialized.delegation_contract_id,
+            Some("dc-001".to_string())
+        );
         assert_eq!(deserialized.ownership_ref, Some("own-001".to_string()));
-        assert_eq!(deserialized.payload_summary, Some("Review batch for sprint-42".to_string()));
+        assert_eq!(
+            deserialized.payload_summary,
+            Some("Review batch for sprint-42".to_string())
+        );
         assert_eq!(deserialized.artifact_count, Some(3));
     }
 
@@ -202,15 +206,16 @@ mod tests {
     fn test_serde_rejects_unknown_package_type() {
         let result: Result<DeliveryPackage, _> =
             serde_json::from_str(r#"{"package_type":"unknown"}"#);
-        assert!(result.is_err(), "expected deserialization error for unknown package_type");
+        assert!(
+            result.is_err(),
+            "expected deserialization error for unknown package_type"
+        );
     }
 
     #[test]
     fn test_missing_optional_fields_in_partial_json() {
-        let pkg: DeliveryPackage = serde_json::from_str(
-            r#"{"package_type":"expedited","source_domain":"mesh"}"#,
-        )
-        .unwrap();
+        let pkg: DeliveryPackage =
+            serde_json::from_str(r#"{"package_type":"expedited","source_domain":"mesh"}"#).unwrap();
         assert_eq!(pkg.package_type, PackageType::Expedited);
         assert_eq!(pkg.source_domain, Some("mesh".to_string()));
         assert!(pkg.target_domain.is_none());
@@ -328,7 +333,10 @@ mod tests {
     #[test]
     fn test_deserialize_unknown_delivery_status_is_error() {
         let result: Result<DeliveryStatus, _> = serde_json::from_str(r#""unknown""#);
-        assert!(result.is_err(), "expected deserialization error for unknown delivery status");
+        assert!(
+            result.is_err(),
+            "expected deserialization error for unknown delivery status"
+        );
     }
 
     #[test]

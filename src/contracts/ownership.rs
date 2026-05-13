@@ -43,11 +43,22 @@ impl Ownership {
     /// Returns `Ok(())` if the ownership fields are consistent,
     /// or a descriptive error string if validation fails.
     pub fn validate(&self) -> Result<(), String> {
-        // Promotion mode requires promoted_from to be set
-        if self.ownership_mode == Some(OwnershipMode::Promotion) && self.promoted_from.is_none() {
-            return Err(
-                "promoted_from is required when ownership_mode is promotion".to_string(),
-            );
+        // Promotion mode requires a non-empty promoted_from lineage reference
+        if self.ownership_mode == Some(OwnershipMode::Promotion) {
+            match &self.promoted_from {
+                None => {
+                    return Err(
+                        "promoted_from is required when ownership_mode is promotion".to_string()
+                    );
+                }
+                Some(v) if v.trim().is_empty() => {
+                    return Err(
+                        "promoted_from must not be empty when ownership_mode is promotion"
+                            .to_string(),
+                    );
+                }
+                _ => { /* lineage reference present and non-empty */ }
+            }
         }
 
         // Mirror mode must not carry promotion lineage — check before the
@@ -61,16 +72,12 @@ impl Ownership {
 
         // promoted_from without promotion mode is a lineage inconsistency
         if self.promoted_from.is_some() && self.ownership_mode != Some(OwnershipMode::Promotion) {
-            return Err(
-                "ownership_mode must be promotion when promoted_from is set".to_string(),
-            );
+            return Err("ownership_mode must be promotion when promoted_from is set".to_string());
         }
 
         // Mirror mode requires backend_kind to identify the upstream source
         if self.ownership_mode == Some(OwnershipMode::Mirror) && self.backend_kind.is_none() {
-            return Err(
-                "backend_kind is required when ownership_mode is mirror".to_string(),
-            );
+            return Err("backend_kind is required when ownership_mode is mirror".to_string());
         }
 
         Ok(())
@@ -130,7 +137,10 @@ mod tests {
             promoted_from: Some("task-abc-123".to_string()),
         };
         let err = ownership.validate().unwrap_err();
-        assert!(err.contains("ownership_mode must be promotion"), "error: {err}");
+        assert!(
+            err.contains("ownership_mode must be promotion"),
+            "error: {err}"
+        );
     }
 
     #[test]
@@ -146,13 +156,19 @@ mod tests {
     #[test]
     fn test_serde_rejects_unknown_ownership_mode() {
         let result: Result<Ownership, _> = serde_json::from_str(r#"{"ownership_mode":"unknown"}"#);
-        assert!(result.is_err(), "expected deserialization error for unknown ownership_mode");
+        assert!(
+            result.is_err(),
+            "expected deserialization error for unknown ownership_mode"
+        );
     }
 
     #[test]
     fn test_serde_rejects_unknown_backend_kind() {
         let result: Result<Ownership, _> = serde_json::from_str(r#"{"backend_kind":"unknown"}"#);
-        assert!(result.is_err(), "expected deserialization error for unknown backend_kind");
+        assert!(
+            result.is_err(),
+            "expected deserialization error for unknown backend_kind"
+        );
     }
 
     #[test]
@@ -179,13 +195,39 @@ mod tests {
 
     #[test]
     fn test_missing_optional_fields_in_partial_json() {
-        let ownership: Ownership = serde_json::from_str(
-            r#"{"ownership_mode":"canonical"}"#,
-        )
-        .unwrap();
+        let ownership: Ownership =
+            serde_json::from_str(r#"{"ownership_mode":"canonical"}"#).unwrap();
         assert_eq!(ownership.ownership_mode, Some(OwnershipMode::Canonical));
         assert!(ownership.backend_kind.is_none());
         assert!(ownership.promoted_from.is_none());
+    }
+
+    #[test]
+    fn test_promotion_with_empty_promoted_from_is_invalid() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Promotion),
+            backend_kind: Some(BackendKind::Task),
+            promoted_from: Some("".to_string()),
+        };
+        let err = ownership.validate().unwrap_err();
+        assert!(
+            err.contains("promoted_from must not be empty"),
+            "error: {err}",
+        );
+    }
+
+    #[test]
+    fn test_promotion_with_whitespace_promoted_from_is_invalid() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Promotion),
+            backend_kind: Some(BackendKind::Task),
+            promoted_from: Some("   ".to_string()),
+        };
+        let err = ownership.validate().unwrap_err();
+        assert!(
+            err.contains("promoted_from must not be empty"),
+            "error: {err}",
+        );
     }
 
     // -- mirror-specific validation ---------------------------------------
