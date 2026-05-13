@@ -31,6 +31,40 @@ pub struct DelegationContract {
     pub downstream_graph_id: Option<String>,
 }
 
+impl DelegationContract {
+    /// Validates delegation contract field consistency.
+    ///
+    /// Returns `Ok(())` if all fields are consistent,
+    /// or a descriptive error string if validation fails.
+    pub fn validate(&self) -> Result<(), String> {
+        // Upstream identity anchor: a work request must be traceable to a backend
+        if self.upstream_work_request_id.is_some() && self.upstream_backend_id.is_none() {
+            return Err(
+                "upstream_backend_id is required when upstream_work_request_id is set"
+                    .to_string(),
+            );
+        }
+
+        // Upstream identity anchor: a task must belong to a work request
+        if self.upstream_task_id.is_some() && self.upstream_work_request_id.is_none() {
+            return Err(
+                "upstream_work_request_id is required when upstream_task_id is set"
+                    .to_string(),
+            );
+        }
+
+        // Downstream identity anchor: graph id without a domain kind is ambiguous
+        if self.downstream_graph_id.is_some() && self.downstream_domain_kind.trim().is_empty() {
+            return Err(
+                "downstream_domain_kind must not be empty when downstream_graph_id is set"
+                    .to_string(),
+            );
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,5 +119,129 @@ mod tests {
         let contract: DelegationContract = serde_json::from_str(json).unwrap();
         assert_eq!(contract.downstream_domain_kind, "graph");
         assert_eq!(contract.downstream_graph_id, Some("g-002".to_string()));
+    }
+
+    // ------------------------------------------------------------------
+    // Validation tests — upstream identity anchors
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_upstream_work_request_requires_backend_id() {
+        let contract = DelegationContract {
+            delegation_id: Some("del-001".to_string()),
+            upstream_work_request_id: Some("wr-001".to_string()),
+            upstream_task_id: None,
+            upstream_backend_id: None,
+            downstream_domain_kind: "graph".to_string(),
+            downstream_graph_id: None,
+        };
+        let err = contract.validate().unwrap_err();
+        assert!(
+            err.contains("upstream_backend_id"),
+            "expected error about missing upstream_backend_id, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_upstream_task_requires_work_request_id() {
+        let contract = DelegationContract {
+            delegation_id: Some("del-001".to_string()),
+            upstream_work_request_id: None,
+            upstream_task_id: Some("task-001".to_string()),
+            upstream_backend_id: Some("backend-alpha".to_string()),
+            downstream_domain_kind: "graph".to_string(),
+            downstream_graph_id: None,
+        };
+        let err = contract.validate().unwrap_err();
+        assert!(
+            err.contains("upstream_work_request_id"),
+            "expected error about missing upstream_work_request_id, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_all_upstream_fields_present_is_valid() {
+        let contract = DelegationContract {
+            delegation_id: Some("del-001".to_string()),
+            upstream_work_request_id: Some("wr-001".to_string()),
+            upstream_task_id: Some("task-001".to_string()),
+            upstream_backend_id: Some("backend-alpha".to_string()),
+            downstream_domain_kind: "graph".to_string(),
+            downstream_graph_id: None,
+        };
+        assert!(contract.validate().is_ok());
+    }
+
+    #[test]
+    fn test_upstream_backend_id_alone_is_valid() {
+        let contract = DelegationContract {
+            delegation_id: None,
+            upstream_work_request_id: None,
+            upstream_task_id: None,
+            upstream_backend_id: Some("backend-alpha".to_string()),
+            downstream_domain_kind: "graph".to_string(),
+            downstream_graph_id: None,
+        };
+        assert!(contract.validate().is_ok());
+    }
+
+    #[test]
+    fn test_no_upstream_fields_is_valid() {
+        let contract = DelegationContract {
+            delegation_id: None,
+            upstream_work_request_id: None,
+            upstream_task_id: None,
+            upstream_backend_id: None,
+            downstream_domain_kind: "graph".to_string(),
+            downstream_graph_id: None,
+        };
+        assert!(contract.validate().is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // Validation tests — downstream identity anchors
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_downstream_graph_id_requires_non_empty_domain_kind() {
+        let contract = DelegationContract {
+            delegation_id: None,
+            upstream_work_request_id: None,
+            upstream_task_id: None,
+            upstream_backend_id: None,
+            downstream_domain_kind: "".to_string(),
+            downstream_graph_id: Some("g-001".to_string()),
+        };
+        let err = contract.validate().unwrap_err();
+        assert!(
+            err.contains("downstream_domain_kind"),
+            "expected error about empty downstream_domain_kind, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_downstream_graph_id_with_valid_domain_kind_is_valid() {
+        let contract = DelegationContract {
+            delegation_id: None,
+            upstream_work_request_id: None,
+            upstream_task_id: None,
+            upstream_backend_id: None,
+            downstream_domain_kind: "mesh".to_string(),
+            downstream_graph_id: Some("g-001".to_string()),
+        };
+        assert!(contract.validate().is_ok());
+    }
+
+    #[test]
+    fn test_no_downstream_graph_id_with_empty_domain_kind_is_valid() {
+        let contract = DelegationContract {
+            delegation_id: None,
+            upstream_work_request_id: None,
+            upstream_task_id: None,
+            upstream_backend_id: None,
+            downstream_domain_kind: "".to_string(),
+            downstream_graph_id: None,
+        };
+        assert!(contract.validate().is_ok());
     }
 }
