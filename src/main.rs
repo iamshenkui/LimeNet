@@ -88,10 +88,8 @@ async fn submit_task(
     }
 }
 
-async fn delegation_ingest(
-    State(_state): State<Arc<AppState>>,
-    Json(contract): Json<DelegationContract>,
-) -> impl IntoResponse {
+/// Pure delegation ingest logic, free of AppState / database dependencies.
+pub fn delegation_ingest_logic(contract: DelegationContract) -> impl IntoResponse {
     match contract.validate() {
         Ok(()) => {
             let response = serde_json::json!({
@@ -104,6 +102,13 @@ async fn delegation_ingest(
             (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response()
         }
     }
+}
+
+async fn delegation_ingest(
+    State(_state): State<Arc<AppState>>,
+    Json(contract): Json<DelegationContract>,
+) -> impl IntoResponse {
+    delegation_ingest_logic(contract)
 }
 
 #[tokio::main]
@@ -147,96 +152,137 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Focused unit tests for delegation_ingest_logic
+// ---------------------------------------------------------------------------
+// These tests exercise the pure ingest function directly, without any
+// database / AppState dependency, so they never imply remote canonical
+// takeover and can run without a PostgreSQL server.
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::Response;
     use axum::body::Body;
-    use axum::http::Request;
-    use tower::ServiceExt;
+    use http_body_util::BodyExt;
 
-    fn test_app() -> Router {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost:5432/postgres")
-            .expect("lazy pool creation should succeed");
-        let state = Arc::new(AppState { pool });
-        Router::new()
-            .route("/api/v1/delegations/ingest", post(delegation_ingest))
-            .with_state(state)
+    /// Convert a `Response<Body>` into a JSON value for assertion convenience.
+    async fn body_to_json(response: Response<Body>) -> serde_json::Value {
+        let collected = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body collection should succeed");
+        serde_json::from_slice(&collected.to_bytes()).unwrap()
     }
 
+    // -- successful ingest ---------------------------------------------------
+
     #[tokio::test]
-    async fn test_ingest_valid_delegation_returns_accepted() {
-        let app = test_app();
-        let body = serde_json::json!({
-            "delegation_id": "del-001",
-            "downstream_domain_kind": "graph"
-        })
-        .to_string();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/delegations/ingest")
-            .header("content-type", "application/json")
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+    async fn test_full_delegation_returns_accepted() {
+        let contract = DelegationContract {
+            delegation_id: Some("del-001".into()),
+            upstream_work_request_id: Some("wr-001".into()),
+            upstream_task_id: Some("task-001".into()),
+            upstream_backend_id: Some("backend-alpha".into()),
+            downstream_domain_kind: "graph".into(),
+            downstream_graph_id: Some("g-001".into()),
+        };
+        let response = delegation_ingest_logic(contract).into_response();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let body = axum::body::to_bytes(response.into_body(), 1024)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["status"], "accepted");
-        assert_eq!(json["delegation_id"], "del-001");
+        let body = body_to_json(response).await;
+        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["delegation_id"], "del-001");
     }
 
     #[tokio::test]
-    async fn test_ingest_invalid_delegation_returns_bad_request() {
-        let app = test_app();
-        let body = serde_json::json!({
-            "upstream_work_request_id": "wr-001",
-            "downstream_domain_kind": "graph"
-        })
-        .to_string();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/delegations/ingest")
-            .header("content-type", "application/json")
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(response.into_body(), 1024)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(json["error"].as_str().unwrap().contains("upstream_backend_id"));
-    }
-
-    #[tokio::test]
-    async fn test_ingest_minimal_payload_returns_accepted() {
-        let app = test_app();
-        let body = serde_json::json!({
-            "downstream_domain_kind": "mesh"
-        })
-        .to_string();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/delegations/ingest")
-            .header("content-type", "application/json")
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+    async fn test_minimal_delegation_returns_accepted() {
+        let contract = DelegationContract {
+            delegation_id: None,
+            upstream_work_request_id: None,
+            upstream_task_id: None,
+            upstream_backend_id: None,
+            downstream_domain_kind: "mesh".into(),
+            downstream_graph_id: None,
+        };
+        let response = delegation_ingest_logic(contract).into_response();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
     }
 
     #[tokio::test]
-    async fn test_ingest_malformed_json_returns_bad_request() {
-        let app = test_app();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/delegations/ingest")
-            .header("content-type", "application/json")
-            .body(Body::from("not json"))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+    async fn test_delegation_with_only_downstream_graph_returns_accepted() {
+        let contract = DelegationContract {
+            delegation_id: None,
+            upstream_work_request_id: None,
+            upstream_task_id: None,
+            upstream_backend_id: None,
+            downstream_domain_kind: "graph".into(),
+            downstream_graph_id: Some("g-002".into()),
+        };
+        let response = delegation_ingest_logic(contract).into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    // -- failed ingest (validation errors) ---------------------------------
+
+    #[tokio::test]
+    async fn test_missing_upstream_backend_id_returns_bad_request() {
+        let contract = DelegationContract {
+            delegation_id: Some("del-002".into()),
+            upstream_work_request_id: Some("wr-001".into()),
+            upstream_task_id: None,
+            upstream_backend_id: None,
+            downstream_domain_kind: "graph".into(),
+            downstream_graph_id: None,
+        };
+        let response = delegation_ingest_logic(contract).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_to_json(response).await;
+        assert!(
+            body["error"].as_str().unwrap().contains("upstream_backend_id"),
+            "expected error about missing upstream_backend_id, got: {:?}",
+            body["error"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_missing_upstream_work_request_id_returns_bad_request() {
+        let contract = DelegationContract {
+            delegation_id: Some("del-003".into()),
+            upstream_work_request_id: None,
+            upstream_task_id: Some("task-001".into()),
+            upstream_backend_id: Some("backend-alpha".into()),
+            downstream_domain_kind: "graph".into(),
+            downstream_graph_id: None,
+        };
+        let response = delegation_ingest_logic(contract).into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_to_json(response).await;
+        assert!(
+            body["error"].as_str().unwrap().contains("upstream_work_request_id"),
+            "expected error about missing upstream_work_request_id, got: {:?}",
+            body["error"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_empty_domain_kind_with_graph_id_returns_bad_request() {
+        let contract = DelegationContract {
+            delegation_id: None,
+            upstream_work_request_id: None,
+            upstream_task_id: None,
+            upstream_backend_id: None,
+            downstream_domain_kind: "".into(),
+            downstream_graph_id: Some("g-001".into()),
+        };
+        let response = delegation_ingest_logic(contract).into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_to_json(response).await;
+        assert!(
+            body["error"].as_str().unwrap().contains("downstream_domain_kind"),
+            "expected error about empty downstream_domain_kind, got: {:?}",
+            body["error"]
+        );
     }
 }
