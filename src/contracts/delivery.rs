@@ -20,6 +20,38 @@ pub enum DeliveryStatus {
     Superseded,
 }
 
+/// Maps an incoming string to the corresponding [`DeliveryStatus`].
+///
+/// # Mapping rules
+///
+/// LimeNet interprets each incoming delivery state string as follows:
+///
+/// | Incoming string     | Mapped variant      | Interpretation                                      |
+/// |---------------------|---------------------|-----------------------------------------------------|
+/// | `"proposed"`        | `Proposed`          | Delivery has been proposed but not yet accepted      |
+/// | `"accepted"`        | `Accepted`          | Delivery has been accepted and is being processed    |
+/// | `"needs_revision"`  | `NeedsRevision`     | Delivery requires revisions before it can proceed    |
+/// | `"rejected"`        | `Rejected`          | Delivery has been rejected and will not be processed |
+/// | `"superseded"`      | `Superseded`        | Delivery has been superseded by a newer delivery     |
+///
+/// Any string that does not exactly match one of the five known values
+/// (including case variations, empty strings, or values from other
+/// vocabularies) is rejected as unsupported.
+impl TryFrom<&str> for DeliveryStatus {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "proposed" => Ok(Self::Proposed),
+            "accepted" => Ok(Self::Accepted),
+            "needs_revision" => Ok(Self::NeedsRevision),
+            "rejected" => Ok(Self::Rejected),
+            "superseded" => Ok(Self::Superseded),
+            _ => Err(format!("unknown delivery status: {value}")),
+        }
+    }
+}
+
 /// Supported package types for a delivery in the LimeNet system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -305,6 +337,93 @@ mod tests {
         let a = DeliveryStatus::Accepted;
         let b = a;
         assert_eq!(a, b);
+    }
+
+    // ------------------------------------------------------------------
+    // DeliveryStatus mapping tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_mapping_supported_values() {
+        assert_eq!(
+            DeliveryStatus::try_from("proposed"),
+            Ok(DeliveryStatus::Proposed),
+        );
+        assert_eq!(
+            DeliveryStatus::try_from("accepted"),
+            Ok(DeliveryStatus::Accepted),
+        );
+        assert_eq!(
+            DeliveryStatus::try_from("needs_revision"),
+            Ok(DeliveryStatus::NeedsRevision),
+        );
+        assert_eq!(
+            DeliveryStatus::try_from("rejected"),
+            Ok(DeliveryStatus::Rejected),
+        );
+        assert_eq!(
+            DeliveryStatus::try_from("superseded"),
+            Ok(DeliveryStatus::Superseded),
+        );
+    }
+
+    #[test]
+    fn test_mapping_unsupported_values() {
+        assert!(
+            DeliveryStatus::try_from("unknown").is_err(),
+            "expected error for unknown status",
+        );
+        assert!(
+            DeliveryStatus::try_from("").is_err(),
+            "expected error for empty string",
+        );
+        assert!(
+            DeliveryStatus::try_from("Proposed").is_err(),
+            "expected error for case variation",
+        );
+        assert!(
+            DeliveryStatus::try_from("pending").is_err(),
+            "expected error for pending (from another vocabulary)",
+        );
+        assert!(
+            DeliveryStatus::try_from("cancelled").is_err(),
+            "expected error for cancelled",
+        );
+        assert!(
+            DeliveryStatus::try_from("in_review").is_err(),
+            "expected error for in_review",
+        );
+        assert!(
+            DeliveryStatus::try_from("completed").is_err(),
+            "expected error for completed",
+        );
+    }
+
+    #[test]
+    fn test_mapping_error_message() {
+        let err = DeliveryStatus::try_from("bogus").unwrap_err();
+        assert!(
+            err.contains("bogus"),
+            "error message should include the unrecognized value: {err}",
+        );
+    }
+
+    #[test]
+    fn test_mapping_roundtrip() {
+        // Every supported status maps back to the same string via serde
+        for (text, status) in &[
+            ("proposed", DeliveryStatus::Proposed),
+            ("accepted", DeliveryStatus::Accepted),
+            ("needs_revision", DeliveryStatus::NeedsRevision),
+            ("rejected", DeliveryStatus::Rejected),
+            ("superseded", DeliveryStatus::Superseded),
+        ] {
+            let mapped = DeliveryStatus::try_from(*text).unwrap();
+            assert_eq!(mapped, *status);
+            // Serde roundtrip confirms the text form matches
+            let serialized = serde_json::to_string(status).unwrap();
+            assert_eq!(serialized, format!("\"{text}\""));
+        }
     }
 
     #[test]
