@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
 use limenet::state::{BackoffAwakener, BatchError, BatchTaskInput, DependencyResolver, HeartbeatError, LeaseReaper, SubmitError, SubmitRequest, TaskRepository};
-use limenet::contracts::{ClaimRequest, DelegationContract, DeliveryPackage, DeliveryStatus, EvidenceRollup, HeartbeatRequest};
+use limenet::contracts::{ClaimRequest, DelegationContract, DeliveryPackage, DeliveryStatus, EvidenceRollup, HeartbeatRequest, PackageType};
 
 #[derive(Clone)]
 struct AppState {
@@ -350,5 +350,140 @@ mod tests {
             "expected error about empty downstream_domain_kind, got: {:?}",
             body["error"]
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Focused unit tests for delivery_package_ingest_logic
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_minimal_delivery_package_returns_accepted() {
+        let pkg = DeliveryPackage {
+            delivery_id: None,
+            source_domain: None,
+            target_domain: None,
+            package_type: PackageType::Standard,
+            delegation_contract_id: None,
+            ownership_ref: None,
+            payload_summary: None,
+            artifact_count: None,
+        };
+        let response = delivery_package_ingest_logic(pkg).into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body_to_json(response).await;
+        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["delivery_id"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_full_delivery_package_returns_accepted_with_id() {
+        let pkg = DeliveryPackage {
+            delivery_id: Some("del-001".into()),
+            source_domain: Some("task-graph".into()),
+            target_domain: Some("human-review".into()),
+            package_type: PackageType::Expedited,
+            delegation_contract_id: Some("dc-001".into()),
+            ownership_ref: Some("own-001".into()),
+            payload_summary: Some("Review batch for sprint-42".into()),
+            artifact_count: Some(3),
+        };
+        let response = delivery_package_ingest_logic(pkg).into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body_to_json(response).await;
+        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["delivery_id"], "del-001");
+    }
+
+    #[tokio::test]
+    async fn test_delivery_package_zero_artifact_count_returns_bad_request() {
+        let pkg = DeliveryPackage {
+            delivery_id: None,
+            source_domain: None,
+            target_domain: None,
+            package_type: PackageType::Batch,
+            delegation_contract_id: None,
+            ownership_ref: None,
+            payload_summary: None,
+            artifact_count: Some(0),
+        };
+        let response = delivery_package_ingest_logic(pkg).into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_to_json(response).await;
+        assert!(
+            body["error"].as_str().unwrap().contains("artifact_count"),
+            "expected error about artifact_count, got: {:?}",
+            body["error"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delivery_package_no_local_subtask_details_required() {
+        // Only package_type is required; no local subtask queue details
+        // from either the source or target domain are needed.
+        for ptype in &[
+            PackageType::Standard,
+            PackageType::Expedited,
+            PackageType::Batch,
+        ] {
+            let pkg = DeliveryPackage {
+                delivery_id: None,
+                source_domain: None,
+                target_domain: None,
+                package_type: *ptype,
+                delegation_contract_id: None,
+                ownership_ref: None,
+                payload_summary: None,
+                artifact_count: None,
+            };
+            let response = delivery_package_ingest_logic(pkg).into_response();
+            assert_eq!(
+                response.status(),
+                StatusCode::ACCEPTED,
+                "expected ACCEPTED for package_type={ptype:?}",
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Focused unit tests for delivery_status_ingest_logic
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_delivery_status_accepted() {
+        let response = delivery_status_ingest_logic(DeliveryStatus::Accepted).into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body_to_json(response).await;
+        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["delivery_status"], "accepted");
+    }
+
+    #[tokio::test]
+    async fn test_delivery_status_needs_revision() {
+        let response = delivery_status_ingest_logic(DeliveryStatus::NeedsRevision).into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body_to_json(response).await;
+        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["delivery_status"], "needs_revision");
+    }
+
+    #[tokio::test]
+    async fn test_delivery_status_all_variants_return_accepted() {
+        for (variant, expected) in &[
+            (DeliveryStatus::Proposed, "proposed"),
+            (DeliveryStatus::Accepted, "accepted"),
+            (DeliveryStatus::NeedsRevision, "needs_revision"),
+            (DeliveryStatus::Rejected, "rejected"),
+            (DeliveryStatus::Superseded, "superseded"),
+        ] {
+            let response = delivery_status_ingest_logic(*variant).into_response();
+            assert_eq!(
+                response.status(),
+                StatusCode::ACCEPTED,
+                "expected ACCEPTED for {expected}",
+            );
+            let body = body_to_json(response).await;
+            assert_eq!(body["status"], "accepted");
+            assert_eq!(body["delivery_status"], *expected);
+        }
     }
 }
