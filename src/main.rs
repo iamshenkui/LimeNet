@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
 use limenet::state::{BackoffAwakener, BatchError, BatchTaskInput, DependencyResolver, HeartbeatError, LeaseReaper, SubmitError, SubmitRequest, TaskRepository};
-use limenet::contracts::{ClaimRequest, HeartbeatRequest};
+use limenet::contracts::{ClaimRequest, DelegationContract, HeartbeatRequest};
 
 #[derive(Clone)]
 struct AppState {
@@ -88,6 +88,24 @@ async fn submit_task(
     }
 }
 
+async fn delegation_ingest(
+    State(_state): State<Arc<AppState>>,
+    Json(contract): Json<DelegationContract>,
+) -> impl IntoResponse {
+    match contract.validate() {
+        Ok(()) => {
+            let response = serde_json::json!({
+                "status": "accepted",
+                "delegation_id": contract.delegation_id,
+            });
+            (StatusCode::ACCEPTED, Json(response)).into_response()
+        }
+        Err(msg) => {
+            (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response()
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = std::env::var("DATABASE_URL")
@@ -118,6 +136,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/tasks/claim", post(claim_task))
         .route("/api/v1/tasks/{task_id}/heartbeat", post(heartbeat_task))
         .route("/api/v1/tasks/{task_id}/submit", post(submit_task))
+        .route("/api/v1/delegations/ingest", post(delegation_ingest))
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:3000").await?;
@@ -126,4 +145,98 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    fn test_app() -> Router {
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost:5432/postgres")
+            .expect("lazy pool creation should succeed");
+        let state = Arc::new(AppState { pool });
+        Router::new()
+            .route("/api/v1/delegations/ingest", post(delegation_ingest))
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn test_ingest_valid_delegation_returns_accepted() {
+        let app = test_app();
+        let body = serde_json::json!({
+            "delegation_id": "del-001",
+            "downstream_domain_kind": "graph"
+        })
+        .to_string();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/delegations/ingest")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "accepted");
+        assert_eq!(json["delegation_id"], "del-001");
+    }
+
+    #[tokio::test]
+    async fn test_ingest_invalid_delegation_returns_bad_request() {
+        let app = test_app();
+        let body = serde_json::json!({
+            "upstream_work_request_id": "wr-001",
+            "downstream_domain_kind": "graph"
+        })
+        .to_string();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/delegations/ingest")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["error"].as_str().unwrap().contains("upstream_backend_id"));
+    }
+
+    #[tokio::test]
+    async fn test_ingest_minimal_payload_returns_accepted() {
+        let app = test_app();
+        let body = serde_json::json!({
+            "downstream_domain_kind": "mesh"
+        })
+        .to_string();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/delegations/ingest")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_malformed_json_returns_bad_request() {
+        let app = test_app();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/delegations/ingest")
+            .header("content-type", "application/json")
+            .body(Body::from("not json"))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }
