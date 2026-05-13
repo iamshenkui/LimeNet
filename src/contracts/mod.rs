@@ -5,7 +5,7 @@ mod ownership;
 mod task;
 
 pub use delegation::DelegationContract;
-pub use delivery::{DeliveryPackage, PackageType};
+pub use delivery::{DeliveryPackage, DeliveryStatus, PackageType};
 pub use evidence_rollup::EvidenceRollup;
 pub use ownership::{BackendKind, Ownership, OwnershipMode};
 pub use task::{ClaimRequest, HeartbeatRequest, Lease, Payload, RetryLogic, Task, TaskRow, TaskStatus};

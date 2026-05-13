@@ -1,5 +1,25 @@
 use serde::{Deserialize, Serialize};
 
+/// Lifecycle status of a delivery in the LimeNet review surface.
+///
+/// Mirrors the shared cross-domain vocabulary so that every
+/// participant observes the same set of states regardless of
+/// the originating domain's internal representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryStatus {
+    /// Delivery has been proposed but not yet accepted by the target
+    Proposed,
+    /// Delivery has been accepted and is being processed
+    Accepted,
+    /// Delivery requires revisions before it can proceed
+    NeedsRevision,
+    /// Delivery has been rejected and will not be processed
+    Rejected,
+    /// Delivery has been superseded by a newer delivery
+    Superseded,
+}
+
 /// Supported package types for a delivery in the LimeNet system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -217,6 +237,74 @@ mod tests {
         };
         let err = pkg.validate().unwrap_err();
         assert!(err.contains("artifact_count"), "error: {err}");
+    }
+
+    // ------------------------------------------------------------------
+    // DeliveryStatus tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_deserialize_delivery_status_proposed() {
+        let json = r#""proposed""#;
+        let status: DeliveryStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(status, DeliveryStatus::Proposed);
+    }
+
+    #[test]
+    fn test_deserialize_delivery_status_accepted() {
+        let json = r#""accepted""#;
+        let status: DeliveryStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(status, DeliveryStatus::Accepted);
+    }
+
+    #[test]
+    fn test_deserialize_delivery_status_needs_revision() {
+        let json = r#""needs_revision""#;
+        let status: DeliveryStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(status, DeliveryStatus::NeedsRevision);
+    }
+
+    #[test]
+    fn test_deserialize_delivery_status_rejected() {
+        let json = r#""rejected""#;
+        let status: DeliveryStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(status, DeliveryStatus::Rejected);
+    }
+
+    #[test]
+    fn test_deserialize_delivery_status_superseded() {
+        let json = r#""superseded""#;
+        let status: DeliveryStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(status, DeliveryStatus::Superseded);
+    }
+
+    #[test]
+    fn test_serde_roundtrip_delivery_status() {
+        for status in &[
+            DeliveryStatus::Proposed,
+            DeliveryStatus::Accepted,
+            DeliveryStatus::NeedsRevision,
+            DeliveryStatus::Rejected,
+            DeliveryStatus::Superseded,
+        ] {
+            let json = serde_json::to_string(status).unwrap();
+            let deserialized: DeliveryStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, *status);
+        }
+    }
+
+    #[test]
+    fn test_deserialize_unknown_delivery_status_is_error() {
+        let result: Result<DeliveryStatus, _> = serde_json::from_str(r#""unknown""#);
+        assert!(result.is_err(), "expected deserialization error for unknown delivery status");
+    }
+
+    #[test]
+    fn test_delivery_status_is_copy() {
+        // Verify Copy semantics — assigning does not move
+        let a = DeliveryStatus::Accepted;
+        let b = a;
+        assert_eq!(a, b);
     }
 
     #[test]
