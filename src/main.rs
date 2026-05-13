@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
 use limenet::state::{BackoffAwakener, BatchError, BatchTaskInput, DependencyResolver, HeartbeatError, LeaseReaper, SubmitError, SubmitRequest, TaskRepository};
-use limenet::contracts::{ClaimRequest, DelegationContract, HeartbeatRequest};
+use limenet::contracts::{ClaimRequest, DelegationContract, DeliveryPackage, DeliveryStatus, EvidenceRollup, HeartbeatRequest};
 
 #[derive(Clone)]
 struct AppState {
@@ -111,6 +111,69 @@ async fn delegation_ingest(
     delegation_ingest_logic(contract)
 }
 
+/// Pure delivery-package ingest logic, free of AppState / database dependencies.
+pub fn delivery_package_ingest_logic(pkg: DeliveryPackage) -> impl IntoResponse {
+    match pkg.validate() {
+        Ok(()) => {
+            let response = serde_json::json!({
+                "status": "accepted",
+                "delivery_id": pkg.delivery_id,
+            });
+            (StatusCode::ACCEPTED, Json(response)).into_response()
+        }
+        Err(msg) => {
+            (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response()
+        }
+    }
+}
+
+/// Pure evidence-rollup ingest logic, free of AppState / database dependencies.
+pub fn evidence_rollup_ingest_logic(rollup: EvidenceRollup) -> impl IntoResponse {
+    match rollup.validate() {
+        Ok(()) => {
+            let response = serde_json::json!({
+                "status": "accepted",
+                "evidence_rollup_id": rollup.evidence_rollup_id,
+            });
+            (StatusCode::ACCEPTED, Json(response)).into_response()
+        }
+        Err(msg) => {
+            (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response()
+        }
+    }
+}
+
+/// Pure delivery-status ingest logic, free of AppState / database dependencies.
+pub fn delivery_status_ingest_logic(status: DeliveryStatus) -> impl IntoResponse {
+    let status_str = serde_json::to_string(&status).unwrap_or_else(|_| "unknown".into());
+    let response = serde_json::json!({
+        "status": "accepted",
+        "delivery_status": status_str.trim_matches('"'),
+    });
+    (StatusCode::ACCEPTED, Json(response)).into_response()
+}
+
+async fn delivery_package_ingest(
+    State(_state): State<Arc<AppState>>,
+    Json(pkg): Json<DeliveryPackage>,
+) -> impl IntoResponse {
+    delivery_package_ingest_logic(pkg)
+}
+
+async fn evidence_rollup_ingest(
+    State(_state): State<Arc<AppState>>,
+    Json(rollup): Json<EvidenceRollup>,
+) -> impl IntoResponse {
+    evidence_rollup_ingest_logic(rollup)
+}
+
+async fn delivery_status_ingest(
+    State(_state): State<Arc<AppState>>,
+    Json(status): Json<DeliveryStatus>,
+) -> impl IntoResponse {
+    delivery_status_ingest_logic(status)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = std::env::var("DATABASE_URL")
@@ -142,6 +205,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/tasks/{task_id}/heartbeat", post(heartbeat_task))
         .route("/api/v1/tasks/{task_id}/submit", post(submit_task))
         .route("/api/v1/delegations/ingest", post(delegation_ingest))
+        .route("/api/v1/deliveries/package", post(delivery_package_ingest))
+        .route("/api/v1/deliveries/evidence", post(evidence_rollup_ingest))
+        .route("/api/v1/deliveries/status", post(delivery_status_ingest))
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:3000").await?;
