@@ -52,6 +52,25 @@ pub struct DeliveryPackage {
     pub artifact_count: Option<u32>,
 }
 
+impl DeliveryPackage {
+    /// Validates delivery package field consistency.
+    ///
+    /// Validation is intentionally coarse-grained to preserve
+    /// review-surface semantics: only field-level sanity is
+    /// checked, and no local subtask details are required.
+    pub fn validate(&self) -> Result<(), String> {
+        // A delivery package with artifact_count=0 is semantically
+        // meaningless — the count describes packaged artifacts in transit
+        if let Some(0) = self.artifact_count {
+            return Err(
+                "artifact_count must be at least 1 when set".to_string(),
+            );
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +167,82 @@ mod tests {
         assert!(pkg.ownership_ref.is_none());
         assert!(pkg.payload_summary.is_none());
         assert!(pkg.artifact_count.is_none());
+    }
+
+    // ------------------------------------------------------------------
+    // Validation tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_minimal_package_is_valid() {
+        let pkg = DeliveryPackage {
+            delivery_id: None,
+            source_domain: None,
+            target_domain: None,
+            package_type: PackageType::Standard,
+            delegation_contract_id: None,
+            ownership_ref: None,
+            payload_summary: None,
+            artifact_count: None,
+        };
+        assert!(pkg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_fully_populated_package_is_valid() {
+        let pkg = DeliveryPackage {
+            delivery_id: Some("del-001".to_string()),
+            source_domain: Some("task-graph".to_string()),
+            target_domain: Some("human-review".to_string()),
+            package_type: PackageType::Expedited,
+            delegation_contract_id: Some("dc-001".to_string()),
+            ownership_ref: Some("own-001".to_string()),
+            payload_summary: Some("Review batch for sprint-42".to_string()),
+            artifact_count: Some(3),
+        };
+        assert!(pkg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_artifact_count_zero_is_invalid() {
+        let pkg = DeliveryPackage {
+            delivery_id: None,
+            source_domain: None,
+            target_domain: None,
+            package_type: PackageType::Batch,
+            delegation_contract_id: None,
+            ownership_ref: None,
+            payload_summary: None,
+            artifact_count: Some(0),
+        };
+        let err = pkg.validate().unwrap_err();
+        assert!(err.contains("artifact_count"), "error: {err}");
+    }
+
+    #[test]
+    fn test_local_subtask_details_not_required() {
+        // The delivery package validates with only the package_type field,
+        // without requiring any local subtask details from either the
+        // source or target domain.
+        for ptype in &[
+            PackageType::Standard,
+            PackageType::Expedited,
+            PackageType::Batch,
+        ] {
+            let pkg = DeliveryPackage {
+                delivery_id: None,
+                source_domain: None,
+                target_domain: None,
+                package_type: *ptype,
+                delegation_contract_id: None,
+                ownership_ref: None,
+                payload_summary: None,
+                artifact_count: None,
+            };
+            assert!(
+                pkg.validate().is_ok(),
+                "expected package_type={ptype:?} (only field) to be valid"
+            );
+        }
     }
 }
