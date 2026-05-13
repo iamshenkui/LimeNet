@@ -1,0 +1,707 @@
+[
+    {
+        "task_id": "LN2B-BND-001",
+        "title": "Add ownership DTO fields",
+        "description": "Add created_from and promoted_from fields to the LimeNet ownership DTO.",
+        "priority": 100,
+        "status": "completed",
+        "acceptance_criteria": [
+            "LimeNet ownership DTO includes created_from and promoted_from.",
+            "The schema keeps a compatible default path for older payloads."
+        ],
+        "dependencies": [],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Align ownership DTO shape",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "medium",
+        "module_scope": "api / schema",
+        "split_guidance": [
+            "Change DTO shape only.",
+            "Do not add validation or handlers here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "ownership"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-002",
+        "title": "Validate ownership DTO values",
+        "description": "Add validation for ownership_mode, backend_kind, and lineage semantics in the LimeNet ownership DTO.",
+        "priority": 99,
+        "status": "completed",
+        "acceptance_criteria": [
+            "Validation rejects unsupported ownership_mode and backend_kind values.",
+            "Lineage semantics are covered in focused tests."
+        ],
+        "dependencies": [
+            "LN2B-BND-001"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Enforce ownership DTO semantics",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "medium",
+        "module_scope": "api / schema / tests",
+        "split_guidance": [
+            "Keep this slice on validation and tests.",
+            "Do not add ingest behavior here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "ownership"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-003",
+        "title": "Add delegation upstream DTO fields",
+        "description": "Add delegation_id, upstream_work_request_id, upstream_task_id, and upstream_backend_id to the LimeNet delegation DTO.",
+        "priority": 98,
+        "status": "completed",
+        "acceptance_criteria": [
+            "LimeNet DelegationContract schema includes the upstream identity anchors.",
+            "The schema keeps a compatible default path for older payloads."
+        ],
+        "dependencies": [],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Align delegation upstream identity",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "medium",
+        "module_scope": "api / schema",
+        "split_guidance": [
+            "Change upstream fields only.",
+            "Do not add downstream fields or validation here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "delegation"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-004",
+        "title": "Add delegation downstream DTO fields",
+        "description": "Add downstream_domain_kind and optional downstream_graph_id to the LimeNet delegation DTO.",
+        "priority": 97,
+        "status": "completed",
+        "acceptance_criteria": [
+            "LimeNet DelegationContract schema includes downstream_domain_kind and optional downstream_graph_id.",
+            "The schema remains coarse-grained and does not flatten local subtasks."
+        ],
+        "dependencies": [
+            "LN2B-BND-003"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Align delegation downstream identity",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "medium",
+        "module_scope": "api / schema",
+        "split_guidance": [
+            "Change downstream fields only.",
+            "Do not add validation here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "delegation"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-005",
+        "title": "Validate DelegationContract DTO",
+        "description": "Add validation and focused tests for the expanded LimeNet DelegationContract DTO.",
+        "priority": 96,
+        "status": "completed",
+        "acceptance_criteria": [
+            "Validation rejects missing upstream identity anchors.",
+            "Validation rejects ambiguous downstream identity anchors.",
+            "Focused tests preserve the coarse-grained boundary."
+        ],
+        "dependencies": [
+            "LN2B-BND-004"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Enforce delegation DTO semantics",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "medium",
+        "module_scope": "api / schema / tests",
+        "split_guidance": [
+            "Keep this slice on validation and tests.",
+            "Do not add ingest handlers here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "delegation"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-006",
+        "title": "Add DeliveryPackage DTO",
+        "description": "Define the LimeNet DeliveryPackage DTO fields for a coarse-grained review surface.",
+        "priority": 95,
+        "status": "completed",
+        "acceptance_criteria": [
+            "DeliveryPackage DTO matches the agreed contract fields.",
+            "Review surfaces remain indirect and coarse-grained."
+        ],
+        "dependencies": [],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Align delivery DTO shape",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "medium",
+        "module_scope": "api / schema",
+        "split_guidance": [
+            "Define DTO shape only.",
+            "Do not add validation or handlers here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "delivery-package"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-007",
+        "title": "Validate DeliveryPackage DTO",
+        "description": "Add validation and focused tests for the LimeNet DeliveryPackage DTO.",
+        "priority": 94,
+        "status": "completed",
+        "acceptance_criteria": [
+            "Validation preserves coarse-grained review semantics.",
+            "Focused tests prove local subtasks are not required."
+        ],
+        "dependencies": [
+            "LN2B-BND-006"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Enforce delivery DTO semantics",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "medium",
+        "module_scope": "api / schema / tests",
+        "split_guidance": [
+            "Keep this slice on validation and tests.",
+            "Do not add ingest handlers here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "delivery-package"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-008",
+        "title": "Add EvidenceRollup DTO",
+        "description": "Define the LimeNet EvidenceRollup DTO fields for summary-sized evidence and indirect artifact references.",
+        "priority": 93,
+        "status": "completed",
+        "acceptance_criteria": [
+            "EvidenceRollup DTO matches the agreed contract fields.",
+            "Artifact references remain indirect and summary-sized."
+        ],
+        "dependencies": [],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Align evidence DTO shape",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "medium",
+        "module_scope": "api / schema",
+        "split_guidance": [
+            "Define DTO shape only.",
+            "Do not add validation or handlers here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "evidence-rollup"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-009",
+        "title": "Validate EvidenceRollup DTO",
+        "description": "Add validation and focused tests for the LimeNet EvidenceRollup DTO.",
+        "priority": 92,
+        "status": "completed",
+        "acceptance_criteria": [
+            "Validation rejects payloads that violate the summary-sized contract.",
+            "Focused tests preserve indirect artifact reference semantics."
+        ],
+        "dependencies": [
+            "LN2B-BND-008"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Enforce evidence DTO semantics",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "medium",
+        "module_scope": "api / schema / tests",
+        "split_guidance": [
+            "Keep this slice on validation and tests.",
+            "Do not add ingest handlers here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "evidence-rollup"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-010",
+        "title": "Add DeliveryStatus enum",
+        "description": "Introduce the LimeNet-side DeliveryStatus enum with the shared vocabulary.",
+        "priority": 91,
+        "status": "completed",
+        "acceptance_criteria": [
+            "DeliveryStatus matches the shared proposed/accepted/needs_revision/rejected/superseded vocabulary.",
+            "The enum lives in the shared LimeNet boundary layer."
+        ],
+        "dependencies": [],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Align delivery status vocabulary",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "low",
+        "module_scope": "api / mapping",
+        "split_guidance": [
+            "Add the enum only.",
+            "Do not add mapping tests here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "delivery-status"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-011",
+        "title": "Validate DeliveryStatus mapping",
+        "description": "Add focused mapping tests for supported and unsupported LimeNet DeliveryStatus values.",
+        "priority": 90,
+        "status": "completed",
+        "acceptance_criteria": [
+            "Mapping rules document how LimeNet interprets each incoming delivery state.",
+            "Focused tests cover supported and unsupported status values."
+        ],
+        "dependencies": [
+            "LN2B-BND-010"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Enforce delivery status mapping",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "low",
+        "module_scope": "api / mapping / tests",
+        "split_guidance": [
+            "Keep this slice on mapping and tests.",
+            "Do not add ingest handlers here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "delivery-status"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-012",
+        "title": "Add delegation ingest handler",
+        "description": "Implement the minimal handler stub that receives and validates DelegationContract payloads.",
+        "priority": 89,
+        "status": "completed",
+        "acceptance_criteria": [
+            "LimeNet receives and validates DelegationContract payloads through a minimal handler.",
+            "Validation failures are explicit and machine-readable."
+        ],
+        "dependencies": [
+            "LN2B-BND-005"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Receive delegation payloads",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "medium",
+        "risk": "high",
+        "module_scope": "api / handler",
+        "split_guidance": [
+            "Only receive and validate delegation payloads.",
+            "Do not schedule downstream execution here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "delegation-ingest"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-013",
+        "title": "Test delegation ingest handler",
+        "description": "Add focused tests for the minimal LimeNet delegation ingest handler.",
+        "priority": 88,
+        "status": "completed",
+        "acceptance_criteria": [
+            "Focused tests cover successful and failed delegation ingest cases.",
+            "The ingest path does not imply remote canonical takeover."
+        ],
+        "dependencies": [
+            "LN2B-BND-012"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Verify delegation ingest",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "medium",
+        "module_scope": "api / handler / tests",
+        "split_guidance": [
+            "Keep this slice on handler tests.",
+            "Do not add delivery ingest here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "delegation-ingest"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-014",
+        "title": "Add delivery ingest handler",
+        "description": "Implement the minimal handler stub that receives DeliveryPackage, EvidenceRollup, and DeliveryStatus payloads.",
+        "priority": 87,
+        "status": "completed",
+        "acceptance_criteria": [
+            "LimeNet receives and validates DeliveryPackage, EvidenceRollup, and DeliveryStatus payloads.",
+            "The handler preserves coarse-grained review semantics."
+        ],
+        "dependencies": [
+            "LN2B-BND-007",
+            "LN2B-BND-009",
+            "LN2B-BND-011"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Receive delivery payloads",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "medium",
+        "risk": "high",
+        "module_scope": "api / handler",
+        "split_guidance": [
+            "Only receive and validate delivery payloads.",
+            "Do not add review-surface projections here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "delivery-ingest"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-015",
+        "title": "Test delivery ingest handler",
+        "description": "Add focused tests for the minimal LimeNet delivery ingest handler.",
+        "priority": 86,
+        "status": "completed",
+        "acceptance_criteria": [
+            "Focused tests cover accepted and needs_revision style ingest cases.",
+            "The handler does not require local subtask queue details."
+        ],
+        "dependencies": [
+            "LN2B-BND-014"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Verify delivery ingest",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "medium",
+        "module_scope": "api / handler / tests",
+        "split_guidance": [
+            "Keep this slice on handler tests.",
+            "Do not add review-surface projections here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "delivery-ingest"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-016",
+        "title": "Validate mirror mode handling",
+        "description": "Add the minimal LimeNet validation logic for mirror ownership payloads.",
+        "priority": 85,
+        "status": "completed",
+        "acceptance_criteria": [
+            "Mirror payloads are validated distinctly from canonical ownership transitions.",
+            "Invalid mirror-mode transitions are rejected explicitly."
+        ],
+        "dependencies": [
+            "LN2B-BND-002"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Enforce mirror semantics",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "medium",
+        "risk": "high",
+        "module_scope": "validation / ownership",
+        "split_guidance": [
+            "Refactor mirror only.",
+            "Do not include promotion behavior here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "mirror"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-017",
+        "title": "Validate promotion mode handling",
+        "description": "Add the minimal LimeNet validation logic for promotion ownership payloads and lineage checks.",
+        "priority": 84,
+        "status": "completed",
+        "acceptance_criteria": [
+            "Promotion payloads are validated distinctly from mirror and canonical ownership.",
+            "Lineage fields are used when promotion is evaluated."
+        ],
+        "dependencies": [
+            "LN2B-BND-016"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Enforce promotion semantics",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "medium",
+        "risk": "high",
+        "module_scope": "validation / ownership",
+        "split_guidance": [
+            "Refactor promotion only.",
+            "Do not enable remote canonical migration here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "promotion"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-018",
+        "title": "Add coarse review surface model",
+        "description": "Introduce the minimal LimeNet-side model for coarse-grained delivery review surfaces.",
+        "priority": 83,
+        "status": "completed",
+        "acceptance_criteria": [
+            "LimeNet stores or projects a coarse-grained review surface for deliveries.",
+            "Local subtask internals are not required to review a delivery."
+        ],
+        "dependencies": [
+            "LN2B-BND-015"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Preserve upstream review boundary",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "medium",
+        "risk": "medium",
+        "module_scope": "review / projection",
+        "split_guidance": [
+            "Add the coarse review-surface model only.",
+            "Do not build the full human review workflow here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "review-surface"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-019",
+        "title": "Test coarse review surface model",
+        "description": "Add focused tests for the LimeNet coarse review surface model.",
+        "priority": 82,
+        "status": "completed",
+        "acceptance_criteria": [
+            "Focused tests prove deliveries remain coarse-grained review surfaces.",
+            "Tests confirm local subtask internals are not required."
+        ],
+        "dependencies": [
+            "LN2B-BND-018"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Verify coarse review boundary",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "medium",
+        "module_scope": "review / projection / tests",
+        "split_guidance": [
+            "Keep this slice on tests.",
+            "Do not build the full human review workflow here."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "review-surface"
+        ],
+        "estimated_chunk_count": 1
+    },
+    {
+        "task_id": "LN2B-BND-020",
+        "title": "Run LimeNet boundary gate",
+        "description": "Run the focused gate for ownership, delegation, delivery ingest, and review-surface changes.",
+        "priority": 81,
+        "status": "completed",
+        "acceptance_criteria": [
+            "Focused LimeNet boundary tests pass.",
+            "Residual integration assumptions are recorded explicitly."
+        ],
+        "dependencies": [
+            "LN2B-BND-013",
+            "LN2B-BND-017",
+            "LN2B-BND-019"
+        ],
+        "parent_task_id": "LN2B-BND",
+        "source_ref": "wiki/PRD-Phase-2B-TaskGraph-Backend-And-Delegation.md",
+        "metadata": {
+            "goal": "Gate LimeNet before integration",
+            "timeout_seconds": "3600"
+        },
+        "repo_path": "/home/dev/projects/portolan/LimeNet",
+        "complexity": "low",
+        "risk": "medium",
+        "module_scope": "regression / acceptance",
+        "split_guidance": [
+            "Record commands and outcomes explicitly.",
+            "Do not start integration without evidence."
+        ],
+        "routing_tags": [
+            "phase-2b",
+            "LimeNet",
+            "regression-gate"
+        ],
+        "estimated_chunk_count": 1,
+        "gate_report": {
+            "status": "passed",
+            "timestamp": "2026-05-14T00:00:00Z",
+            "focused_tests": {
+                "total": 101,
+                "passed": 101,
+                "failed": 0
+            },
+            "integration_tests": {
+                "total": 14,
+                "skipped": 14,
+                "reason": "require postgres database"
+            },
+            "modules_tested": [
+                "contracts::ownership (17 tests) — DTO validation, miror/promotion/canonical semantics",
+                "contracts::delegation (11 tests) — upstream/downstream identity anchors",
+                "contracts::delivery (37 tests) — delivery package, delivery status enum, mapping",
+                "contracts::evidence_rollup (13 tests) — summary-sized contract, indirect artifact refs",
+                "contracts::review_surface (12 tests) — coarse-grained review boundary",
+                "handlers::ingest (21 tests) — delegation/delivery/evidence/status/ownership ingest logic"
+            ],
+            "residual_integration_assumptions": [
+                "PostgreSQL database with matching schema is required for TaskRepository and task integration tests (14 tests in state::repository and contracts::task)",
+                "Main binary (src/main.rs) ingest handlers are tested purely at the logic layer — database wiring (AppState, sqlx::PgPool) is not exercised in unit tests",
+                "DependencyResolver, LeaseReaper, and BackoffAwakener background loops are not covered by focused tests — they require a live database connection and async runtime integration",
+                "DeliveryStatus TryFrom mapping assumes the cross-domain vocabulary is exactly: proposed, accepted, needs_revision, rejected, superseded — any additions to the shared vocabulary require updating both the enum and tests::test_mapping_unsupported_values",
+                "ReviewSurface validation assumes submitted_at precedes reviewed_at — no cross-field temporal validation beyond existence is implemented",
+                "Ownership validate() rejects miror + promoted_from as an invalid transition — this assumes miror ownership never carries lineage, which is consistent with the task_graph domain model"
+            ]
+        }
+    }
+]
