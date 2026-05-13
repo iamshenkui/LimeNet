@@ -50,10 +50,26 @@ impl Ownership {
             );
         }
 
+        // Mirror mode must not carry promotion lineage — check before the
+        // generic promoted_from guard so mirror-specific errors surface first
+        if self.ownership_mode == Some(OwnershipMode::Mirror) && self.promoted_from.is_some() {
+            return Err(
+                "invalid mirror-mode transition: promoted_from is not allowed for mirror ownership"
+                    .to_string(),
+            );
+        }
+
         // promoted_from without promotion mode is a lineage inconsistency
         if self.promoted_from.is_some() && self.ownership_mode != Some(OwnershipMode::Promotion) {
             return Err(
                 "ownership_mode must be promotion when promoted_from is set".to_string(),
+            );
+        }
+
+        // Mirror mode requires backend_kind to identify the upstream source
+        if self.ownership_mode == Some(OwnershipMode::Mirror) && self.backend_kind.is_none() {
+            return Err(
+                "backend_kind is required when ownership_mode is mirror".to_string(),
             );
         }
 
@@ -170,5 +186,66 @@ mod tests {
         assert_eq!(ownership.ownership_mode, Some(OwnershipMode::Canonical));
         assert!(ownership.backend_kind.is_none());
         assert!(ownership.promoted_from.is_none());
+    }
+
+    // -- mirror-specific validation ---------------------------------------
+
+    #[test]
+    fn test_mirror_without_backend_kind_is_invalid() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Mirror),
+            backend_kind: None,
+            promoted_from: None,
+        };
+        let err = ownership.validate().unwrap_err();
+        assert!(
+            err.contains("backend_kind is required when ownership_mode is mirror"),
+            "error: {err}",
+        );
+    }
+
+    #[test]
+    fn test_mirror_with_promoted_from_is_invalid_transition() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Mirror),
+            backend_kind: Some(BackendKind::Workflow),
+            promoted_from: Some("task-abc".to_string()),
+        };
+        let err = ownership.validate().unwrap_err();
+        assert!(
+            err.contains("invalid mirror-mode transition"),
+            "error: {err}",
+        );
+    }
+
+    #[test]
+    fn test_mirror_with_valid_backend_kind_passes() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Mirror),
+            backend_kind: Some(BackendKind::Task),
+            promoted_from: None,
+        };
+        assert!(ownership.validate().is_ok());
+    }
+
+    #[test]
+    fn test_mirror_with_workflow_backend_kind_passes() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Mirror),
+            backend_kind: Some(BackendKind::Workflow),
+            promoted_from: None,
+        };
+        assert!(ownership.validate().is_ok());
+    }
+
+    #[test]
+    fn test_canonical_without_backend_kind_passes() {
+        // Canonical ownership does not require backend_kind — only mirror does
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Canonical),
+            backend_kind: None,
+            promoted_from: None,
+        };
+        assert!(ownership.validate().is_ok());
     }
 }

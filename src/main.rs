@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
 use limenet::state::{BackoffAwakener, BatchError, BatchTaskInput, DependencyResolver, HeartbeatError, LeaseReaper, SubmitError, SubmitRequest, TaskRepository};
-use limenet::contracts::{ClaimRequest, DelegationContract, DeliveryPackage, DeliveryStatus, EvidenceRollup, HeartbeatRequest, PackageType};
+use limenet::contracts::{BackendKind, ClaimRequest, DelegationContract, DeliveryPackage, DeliveryStatus, EvidenceRollup, HeartbeatRequest, Ownership, OwnershipMode, PackageType};
 
 #[derive(Clone)]
 struct AppState {
@@ -153,6 +153,22 @@ pub fn delivery_status_ingest_logic(status: DeliveryStatus) -> impl IntoResponse
     (StatusCode::ACCEPTED, Json(response)).into_response()
 }
 
+/// Pure ownership ingest logic, free of AppState / database dependencies.
+pub fn ownership_ingest_logic(ownership: Ownership) -> impl IntoResponse {
+    match ownership.validate() {
+        Ok(()) => {
+            let response = serde_json::json!({
+                "status": "accepted",
+                "ownership_mode": ownership.ownership_mode,
+            });
+            (StatusCode::ACCEPTED, Json(response)).into_response()
+        }
+        Err(msg) => {
+            (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response()
+        }
+    }
+}
+
 async fn delivery_package_ingest(
     State(_state): State<Arc<AppState>>,
     Json(pkg): Json<DeliveryPackage>,
@@ -172,6 +188,13 @@ async fn delivery_status_ingest(
     Json(status): Json<DeliveryStatus>,
 ) -> impl IntoResponse {
     delivery_status_ingest_logic(status)
+}
+
+async fn ownership_ingest(
+    State(_state): State<Arc<AppState>>,
+    Json(ownership): Json<Ownership>,
+) -> impl IntoResponse {
+    ownership_ingest_logic(ownership)
 }
 
 #[tokio::main]
@@ -208,6 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/deliveries/package", post(delivery_package_ingest))
         .route("/api/v1/deliveries/evidence", post(evidence_rollup_ingest))
         .route("/api/v1/deliveries/status", post(delivery_status_ingest))
+        .route("/api/v1/ownership/ingest", post(ownership_ingest))
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:3000").await?;
@@ -485,5 +509,105 @@ mod tests {
             assert_eq!(body["status"], "accepted");
             assert_eq!(body["delivery_status"], *expected);
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Focused unit tests for ownership_ingest_logic
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_mirror_ownership_ingest_returns_accepted() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Mirror),
+            backend_kind: Some(BackendKind::Workflow),
+            promoted_from: None,
+        };
+        let response = ownership_ingest_logic(ownership).into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body_to_json(response).await;
+        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["ownership_mode"], "mirror");
+    }
+
+    #[tokio::test]
+    async fn test_canonical_ownership_ingest_returns_accepted() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Canonical),
+            backend_kind: Some(BackendKind::Task),
+            promoted_from: None,
+        };
+        let response = ownership_ingest_logic(ownership).into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body_to_json(response).await;
+        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["ownership_mode"], "canonical");
+    }
+
+    #[tokio::test]
+    async fn test_promotion_ownership_ingest_returns_accepted() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Promotion),
+            backend_kind: Some(BackendKind::Task),
+            promoted_from: Some("task-001".into()),
+        };
+        let response = ownership_ingest_logic(ownership).into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body_to_json(response).await;
+        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["ownership_mode"], "promotion");
+    }
+
+    #[tokio::test]
+    async fn test_mirror_without_backend_kind_returns_bad_request() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Mirror),
+            backend_kind: None,
+            promoted_from: None,
+        };
+        let response = ownership_ingest_logic(ownership).into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_to_json(response).await;
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("backend_kind is required when ownership_mode is mirror"),
+            "error: {:?}",
+            body["error"],
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mirror_with_promoted_from_returns_bad_request() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Mirror),
+            backend_kind: Some(BackendKind::Workflow),
+            promoted_from: Some("task-abc".into()),
+        };
+        let response = ownership_ingest_logic(ownership).into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_to_json(response).await;
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("invalid mirror-mode transition"),
+            "error: {:?}",
+            body["error"],
+        );
+    }
+
+    #[tokio::test]
+    async fn test_empty_ownership_ingest_returns_accepted() {
+        let ownership = Ownership {
+            ownership_mode: None,
+            backend_kind: None,
+            promoted_from: None,
+        };
+        let response = ownership_ingest_logic(ownership).into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body_to_json(response).await;
+        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["ownership_mode"], serde_json::Value::Null);
     }
 }
