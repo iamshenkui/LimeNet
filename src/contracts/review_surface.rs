@@ -58,10 +58,10 @@ impl ReviewSurface {
     pub fn validate(&self) -> Result<(), String> {
         // A review surface with a summary that is present but empty
         // violates the coarse-grained contract
-        if let Some(ref s) = self.review_summary {
-            if s.trim().is_empty() {
-                return Err("review_summary must not be empty when set".to_string());
-            }
+        if let Some(ref s) = self.review_summary
+            && s.trim().is_empty()
+        {
+            return Err("review_summary must not be empty when set".to_string());
         }
 
         // reviewed_at without submitted_at is a temporal inconsistency
@@ -175,10 +175,7 @@ mod tests {
             Some("dc-001".to_string())
         );
         assert_eq!(deserialized.source_domain, Some("task-graph".to_string()));
-        assert_eq!(
-            deserialized.target_domain,
-            Some("human-review".to_string())
-        );
+        assert_eq!(deserialized.target_domain, Some("human-review".to_string()));
         assert_eq!(
             deserialized.submitted_at,
             Some("2025-01-15T10:00:00Z".to_string())
@@ -331,5 +328,29 @@ mod tests {
                 "expected status={status:?} (only field) to be valid"
             );
         }
+    }
+
+    #[test]
+    fn test_delivery_ref_requires_no_internals() {
+        // A ReviewSurface referencing a delivery by ID must not require
+        // any DeliveryPackage internals (package_type, artifact_count,
+        // ownership_ref, etc.) — proving deliveries remain coarse-grained
+        // review surfaces and do not leak their subtask details upward.
+        let surface = ReviewSurface {
+            review_id: None,
+            delivery_id: Some("del-001".to_string()),
+            status: Some(DeliveryStatus::Proposed),
+            review_summary: None,
+            evidence_rollup_ids: None,
+            delegation_contract_id: None,
+            source_domain: None,
+            target_domain: None,
+            submitted_at: None,
+            reviewed_at: None,
+        };
+        assert!(
+            surface.validate().is_ok(),
+            "delivery_id reference should not require DeliveryPackage internals"
+        );
     }
 }
