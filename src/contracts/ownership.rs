@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
 /// Structured ownership validation error for cross-repo integration comparison.
@@ -135,6 +135,43 @@ pub enum BackendKind {
     Postgres,
 }
 
+/// Custom deserializer for `Option<BackendKind>` that maps unknown backend_kind
+/// strings to `None` instead of failing deserialization.
+///
+/// GAP-OWN-01: Python's BackendKind includes `json`, `local_limenet`,
+/// `remote_limenet`, `sqlite`, and `postgres` — none of which map to
+/// Rust's `Task` or `Workflow` variants.  Rather than rejecting the entire
+/// `Ownership` record, we silently drop the unknown backend_kind so that
+/// `ownership_mode`, `promoted_from`, and `created_from` can still be
+/// validated across the repo boundary.
+fn deserialize_lenient_backend_kind<'de, D>(deserializer: D) -> Result<Option<BackendKind>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt_str: Option<String> = Option::deserialize(deserializer)?;
+    Ok(opt_str.and_then(|s| match s.as_str() {
+        "task" => Some(BackendKind::Task),
+        "workflow" => Some(BackendKind::Workflow),
+        _ => None,
+    }))
+}
+
+/// Custom deserializer for `Option<String>` that normalizes empty and
+/// whitespace-only strings to `None`.
+///
+/// GAP-OWN-03: Python emits `"promoted_from": ""` for mirror records
+/// (semantically "no promotion lineage").  Without this normalizer, Rust
+/// serde maps `""` to `Some("")`, which triggers the mirror
+/// `invalid_transition` guardrail — a false positive that rejects
+/// semantically valid Python mirror fixtures.
+fn deserialize_empty_as_none<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt_str: Option<String> = Option::deserialize(deserializer)?;
+    Ok(opt_str.filter(|s| !s.trim().is_empty()))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ownership {
     /// The ownership mode for this task (canonical, mirror, or promotion)
@@ -142,16 +179,18 @@ pub struct Ownership {
     pub ownership_mode: Option<OwnershipMode>,
 
     /// The kind of backend system this task belongs to
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_lenient_backend_kind")]
     pub backend_kind: Option<BackendKind>,
 
     /// Graph or task identifier this ownership was derived from
-    /// (empty when the graph is original)
-    #[serde(default)]
+    /// (empty when the graph is original).
+    /// Normalizes empty/whitespace strings to `None` (GAP-OWN-03).
+    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     pub created_from: Option<String>,
 
-    /// Reference to the source this task was promoted from
-    #[serde(default)]
+    /// Reference to the source this task was promoted from.
+    /// Normalizes empty/whitespace strings to `None` (GAP-OWN-03).
+    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     pub promoted_from: Option<String>,
 }
 
@@ -421,11 +460,14 @@ mod tests {
     }
 
     #[test]
-    fn test_serde_rejects_unknown_backend_kind() {
-        let result: Result<Ownership, _> = serde_json::from_str(r#"{"backend_kind":"unknown"}"#);
+    fn test_unknown_backend_kind_defaults_to_none() {
+        // GAP-OWN-01: Python backend_kind values (json, local_limenet, etc.)
+        // do not map to Rust BackendKind, so the lenient deserializer maps
+        // unknown values to None instead of failing.
+        let ownership: Ownership = serde_json::from_str(r#"{"backend_kind":"unknown"}"#).unwrap();
         assert!(
-            result.is_err(),
-            "expected deserialization error for unknown backend_kind"
+            ownership.backend_kind.is_none(),
+            "unknown backend_kind must default to None per GAP-OWN-01 lenient deserializer"
         );
     }
 
