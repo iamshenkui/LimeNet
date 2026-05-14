@@ -326,7 +326,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::Response;
     use http_body_util::BodyExt;
-    use limenet::contracts::{BackendKind, OwnershipMode, PackageType};
+    use limenet::contracts::{BackendKind, OwnershipMode, PackageType, ReviewSurface};
 
     /// Convert a `Response<Body>` into a JSON value for assertion convenience.
     async fn body_to_json(response: Response<Body>) -> serde_json::Value {
@@ -710,6 +710,36 @@ mod tests {
             body["error"].as_str().unwrap().contains("unknown delivery status"),
             "expected error about unknown status, got: {:?}",
             body["error"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delivery_status_serde_error_consistent_with_try_from() {
+        // The custom Deserialize impl should produce an error whose
+        // Display representation contains the unrecognised value,
+        // matching the TryFrom error format.
+        let serde_err =
+            serde_json::from_str::<DeliveryStatus>(r#""bogus_value""#).unwrap_err();
+        let err_msg = serde_err.to_string();
+        assert!(
+            err_msg.contains("bogus_value"),
+            "custom Deserialize error should include the unrecognised value: {err_msg}",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delivery_status_serde_error_inside_review_surface() {
+        // Unknown status inside ReviewSurface must also fail with a
+        // consistent error that includes the unrecognised value.
+        let serde_err = serde_json::from_str::<ReviewSurface>(
+            r#"{"status":"invalid_status"}"#,
+        )
+        .unwrap_err();
+        let err_msg = serde_err.to_string();
+        assert!(
+            err_msg.contains("invalid_status"),
+            "custom Deserialize error inside ReviewSurface should include \
+             the unrecognised value: {err_msg}",
         );
     }
 

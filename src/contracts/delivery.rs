@@ -1,4 +1,5 @@
 use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
@@ -7,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Mirrors the shared cross-domain vocabulary so that every
 /// participant observes the same set of states regardless of
 /// the originating domain's internal representation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryStatus {
     /// Delivery has been proposed but not yet accepted by the target
@@ -42,6 +43,46 @@ impl DeliveryStatus {
 impl fmt::Display for DeliveryStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for DeliveryStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s)
+    }
+}
+
+/// Uses the same [`TryFrom`] logic as the ingest boundary so that Serde
+/// rejects unknown variants with a consistent error message regardless
+/// of whether the value arrives via a standalone status string or embedded
+/// inside a [`ReviewSurface`](crate::contracts::ReviewSurface).
+impl<'de> serde::Deserialize<'de> for DeliveryStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de;
+
+        struct DeliveryStatusVisitor;
+
+        impl<'de> de::Visitor<'de> for DeliveryStatusVisitor {
+            type Value = DeliveryStatus;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str(
+                    "one of: proposed, accepted, needs_revision, rejected, superseded",
+                )
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<DeliveryStatus, E> {
+                DeliveryStatus::try_from(value)
+                    .map_err(|msg| E::custom(msg))
+            }
+        }
+
+        deserializer.deserialize_str(DeliveryStatusVisitor)
     }
 }
 
@@ -457,6 +498,42 @@ mod tests {
             let serialized = serde_json::to_string(status).unwrap();
             assert_eq!(serialized, format!("\"{text}\""));
         }
+    }
+
+    // ------------------------------------------------------------------
+    // FromStr tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_from_str_supported_values() {
+        assert_eq!(
+            "proposed".parse::<DeliveryStatus>().unwrap(),
+            DeliveryStatus::Proposed,
+        );
+        assert_eq!(
+            "accepted".parse::<DeliveryStatus>().unwrap(),
+            DeliveryStatus::Accepted,
+        );
+        assert_eq!(
+            "needs_revision".parse::<DeliveryStatus>().unwrap(),
+            DeliveryStatus::NeedsRevision,
+        );
+        assert_eq!(
+            "rejected".parse::<DeliveryStatus>().unwrap(),
+            DeliveryStatus::Rejected,
+        );
+        assert_eq!(
+            "superseded".parse::<DeliveryStatus>().unwrap(),
+            DeliveryStatus::Superseded,
+        );
+    }
+
+    #[test]
+    fn test_from_str_unsupported_values() {
+        assert!("unknown".parse::<DeliveryStatus>().is_err());
+        assert!("".parse::<DeliveryStatus>().is_err());
+        assert!("Proposed".parse::<DeliveryStatus>().is_err());
+        assert!("pending".parse::<DeliveryStatus>().is_err());
     }
 
     #[test]
