@@ -136,12 +136,22 @@ async fn delegation_ingest(
 }
 
 /// Pure delivery-package ingest logic, free of AppState / database dependencies.
+///
+/// Returns all received delivery-package fields in the response so that consumers
+/// can verify correct receipt without field loss or semantic drift.
 pub fn delivery_package_ingest_logic(pkg: DeliveryPackage) -> impl IntoResponse {
     match pkg.validate() {
         Ok(()) => {
             let response = serde_json::json!({
                 "status": "accepted",
                 "delivery_id": pkg.delivery_id,
+                "source_domain": pkg.source_domain,
+                "target_domain": pkg.target_domain,
+                "package_type": pkg.package_type,
+                "delegation_contract_id": pkg.delegation_contract_id,
+                "ownership_ref": pkg.ownership_ref,
+                "payload_summary": pkg.payload_summary,
+                "artifact_count": pkg.artifact_count,
             });
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
@@ -154,12 +164,20 @@ pub fn delivery_package_ingest_logic(pkg: DeliveryPackage) -> impl IntoResponse 
 }
 
 /// Pure evidence-rollup ingest logic, free of AppState / database dependencies.
+///
+/// Returns all received evidence-rollup fields in the response so that consumers
+/// can verify correct receipt without field loss or semantic drift.
 pub fn evidence_rollup_ingest_logic(rollup: EvidenceRollup) -> impl IntoResponse {
     match rollup.validate() {
         Ok(()) => {
             let response = serde_json::json!({
                 "status": "accepted",
                 "evidence_rollup_id": rollup.evidence_rollup_id,
+                "summary": rollup.summary,
+                "artifact_refs": rollup.artifact_refs,
+                "source_domain": rollup.source_domain,
+                "evidence_count": rollup.evidence_count,
+                "delivery_id": rollup.delivery_id,
             });
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
@@ -871,6 +889,192 @@ mod tests {
                     "promoted_from must be absent for {case_name}"
                 ),
             }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Fixture-baseline roundtrip tests — delivery packages
+    // -------------------------------------------------------------------
+
+    /// Serialize → deserialize roundtrip preserves all fields for every baseline package.
+    #[test]
+    fn test_all_baseline_delivery_package_records_serde_roundtrip() {
+        for record in limenet::fixtures::DeliveryFixtures::all_baseline_packages() {
+            let json = serde_json::to_string(&record).expect("fixture must serialize");
+            let rt: DeliveryPackage =
+                serde_json::from_str(&json).expect("fixture must deserialize");
+            assert_eq!(rt.delivery_id, record.delivery_id);
+            assert_eq!(rt.source_domain, record.source_domain);
+            assert_eq!(rt.target_domain, record.target_domain);
+            assert_eq!(rt.package_type, record.package_type);
+            assert_eq!(rt.delegation_contract_id, record.delegation_contract_id);
+            assert_eq!(rt.ownership_ref, record.ownership_ref);
+            assert_eq!(rt.payload_summary, record.payload_summary);
+            assert_eq!(rt.artifact_count, record.artifact_count);
+        }
+    }
+
+    /// Every baseline delivery package is accepted by the ingest handler.
+    #[tokio::test]
+    async fn test_all_baseline_delivery_package_records_accepted_by_ingest() {
+        for record in limenet::fixtures::DeliveryFixtures::all_baseline_packages() {
+            let response = delivery_package_ingest_logic(record).into_response();
+            assert_eq!(
+                response.status(),
+                StatusCode::ACCEPTED,
+                "all baseline delivery package fixtures must be accepted"
+            );
+        }
+    }
+
+    /// Ingest response echoes back all fields for every baseline package.
+    #[tokio::test]
+    async fn test_baseline_delivery_package_ingest_response_echoes_all_fields() {
+        use limenet::fixtures::DeliveryFixtures;
+
+        for (case_name, record) in DeliveryFixtures::packages_by_case() {
+            let response = delivery_package_ingest_logic(record.clone()).into_response();
+            assert_eq!(
+                response.status(),
+                StatusCode::ACCEPTED,
+                "case {case_name} must be accepted"
+            );
+            let body = body_to_json(response).await;
+            assert_eq!(body["status"], "accepted", "case {case_name}");
+
+            assert_eq!(
+                body["delivery_id"],
+                serde_json::to_value(&record.delivery_id).unwrap(),
+                "delivery_id mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["source_domain"],
+                serde_json::to_value(&record.source_domain).unwrap(),
+                "source_domain mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["target_domain"],
+                serde_json::to_value(&record.target_domain).unwrap(),
+                "target_domain mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["package_type"],
+                serde_json::to_value(record.package_type).unwrap(),
+                "package_type mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["delegation_contract_id"],
+                serde_json::to_value(&record.delegation_contract_id).unwrap(),
+                "delegation_contract_id mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["ownership_ref"],
+                serde_json::to_value(&record.ownership_ref).unwrap(),
+                "ownership_ref mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["payload_summary"],
+                serde_json::to_value(&record.payload_summary).unwrap(),
+                "payload_summary mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["artifact_count"],
+                serde_json::to_value(record.artifact_count).unwrap(),
+                "artifact_count mismatch for {case_name}"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Fixture-baseline roundtrip tests — evidence rollups
+    // -------------------------------------------------------------------
+
+    /// Serialize → deserialize roundtrip preserves all fields for every baseline rollup.
+    #[test]
+    fn test_all_baseline_evidence_rollup_records_serde_roundtrip() {
+        for record in limenet::fixtures::DeliveryFixtures::all_baseline_rollups() {
+            let json = serde_json::to_string(&record).expect("fixture must serialize");
+            let rt: EvidenceRollup =
+                serde_json::from_str(&json).expect("fixture must deserialize");
+            assert_eq!(rt.evidence_rollup_id, record.evidence_rollup_id);
+            assert_eq!(rt.summary, record.summary);
+            assert_eq!(rt.artifact_refs, record.artifact_refs);
+            assert_eq!(rt.source_domain, record.source_domain);
+            assert_eq!(rt.evidence_count, record.evidence_count);
+            assert_eq!(rt.delivery_id, record.delivery_id);
+        }
+    }
+
+    /// Every baseline evidence rollup is accepted by the ingest handler.
+    #[tokio::test]
+    async fn test_all_baseline_evidence_rollup_records_accepted_by_ingest() {
+        for record in limenet::fixtures::DeliveryFixtures::all_baseline_rollups() {
+            let response = evidence_rollup_ingest_logic(record).into_response();
+            assert_eq!(
+                response.status(),
+                StatusCode::ACCEPTED,
+                "all baseline evidence rollup fixtures must be accepted"
+            );
+        }
+    }
+
+    /// Ingest response echoes back all fields for every baseline rollup.
+    #[tokio::test]
+    async fn test_baseline_evidence_rollup_ingest_response_echoes_all_fields() {
+        use limenet::fixtures::DeliveryFixtures;
+
+        for (case_name, record) in DeliveryFixtures::rollups_by_case() {
+            let response = evidence_rollup_ingest_logic(record.clone()).into_response();
+            assert_eq!(
+                response.status(),
+                StatusCode::ACCEPTED,
+                "case {case_name} must be accepted"
+            );
+            let body = body_to_json(response).await;
+            assert_eq!(body["status"], "accepted", "case {case_name}");
+
+            assert_eq!(
+                body["evidence_rollup_id"],
+                serde_json::to_value(&record.evidence_rollup_id).unwrap(),
+                "evidence_rollup_id mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["summary"],
+                serde_json::to_value(&record.summary).unwrap(),
+                "summary mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["artifact_refs"],
+                serde_json::to_value(&record.artifact_refs).unwrap(),
+                "artifact_refs mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["source_domain"],
+                serde_json::to_value(&record.source_domain).unwrap(),
+                "source_domain mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["evidence_count"],
+                serde_json::to_value(record.evidence_count).unwrap(),
+                "evidence_count mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["delivery_id"],
+                serde_json::to_value(&record.delivery_id).unwrap(),
+                "delivery_id mismatch for {case_name}"
+            );
         }
     }
 }
