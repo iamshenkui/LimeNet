@@ -1,4 +1,91 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
+
+/// Structured ownership validation error for cross-repo integration comparison.
+///
+/// Each error carries a stable `error` discriminator (`"validation_failed"`),
+/// a `reason` classifying the failure (`missing_field`, `empty_field`,
+/// `invalid_transition`), and the `field` and `ownership_mode` involved.
+#[derive(Debug, Clone, Serialize)]
+pub struct OwnershipError {
+    /// Stable error discriminator — always `"validation_failed"`.
+    pub error: String,
+    /// Structured reason: `"missing_field"`, `"empty_field"`, or `"invalid_transition"`.
+    pub reason: String,
+    /// The field that caused the validation failure (e.g. `"backend_kind"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// The ownership mode context (e.g. `"mirror"`, `"promotion"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ownership_mode: Option<String>,
+}
+
+impl OwnershipError {
+    fn missing_field(field: &str, mode: &str) -> Self {
+        Self {
+            error: "validation_failed".into(),
+            reason: "missing_field".into(),
+            field: Some(field.into()),
+            ownership_mode: Some(mode.into()),
+        }
+    }
+
+    fn empty_field(field: &str, mode: Option<&str>) -> Self {
+        Self {
+            error: "validation_failed".into(),
+            reason: "empty_field".into(),
+            field: Some(field.into()),
+            ownership_mode: mode.map(String::from),
+        }
+    }
+
+    fn invalid_transition(field: &str, mode: &str) -> Self {
+        Self {
+            error: "validation_failed".into(),
+            reason: "invalid_transition".into(),
+            field: Some(field.into()),
+            ownership_mode: Some(mode.into()),
+        }
+    }
+}
+
+impl fmt::Display for OwnershipError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.reason.as_str() {
+            "missing_field" => {
+                let mode = self.ownership_mode.as_deref().unwrap_or("unknown");
+                write!(
+                    f,
+                    "{} is required when ownership_mode is {}",
+                    self.field.as_deref().unwrap_or("field"),
+                    mode
+                )
+            }
+            "empty_field" => {
+                if self.field.as_deref() == Some("created_from") {
+                    write!(f, "created_from must not be empty when set")
+                } else {
+                    let mode = self.ownership_mode.as_deref().unwrap_or("unknown");
+                    write!(
+                        f,
+                        "{} must not be empty when ownership_mode is {}",
+                        self.field.as_deref().unwrap_or("field"),
+                        mode
+                    )
+                }
+            }
+            "invalid_transition" => {
+                let mode = self.ownership_mode.as_deref().unwrap_or("unknown");
+                let field = self.field.as_deref().unwrap_or("field");
+                write!(
+                    f,
+                    "invalid {mode}-mode transition: {field} is not allowed for {mode} ownership"
+                )
+            }
+            _ => write!(f, "ownership validation failed"),
+        }
+    }
+}
 
 /// Supported ownership modes for a task in the LimeNet system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,19 +135,27 @@ impl Ownership {
     /// Returns `Ok(())` if the ownership fields are consistent,
     /// or a descriptive error string if validation fails.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_structured().map_err(|e| e.to_string())
+    }
+
+    /// Validates ownership DTO lineage semantics and returns a structured
+    /// [`OwnershipError`] on failure, suitable for cross-repo comparison.
+    ///
+    /// The structured error distinguishes missing fields, empty fields, and
+    /// invalid mode/field transitions, and surfaces the field and ownership
+    /// mode involved.
+    pub fn validate_structured(&self) -> Result<(), OwnershipError> {
         // Promotion mode requires a non-empty promoted_from lineage reference
         if self.ownership_mode == Some(OwnershipMode::Promotion) {
             match &self.promoted_from {
                 None => {
-                    return Err(
-                        "promoted_from is required when ownership_mode is promotion".to_string()
-                    );
+                    return Err(OwnershipError::missing_field("promoted_from", "promotion"));
                 }
                 Some(v) if v.trim().is_empty() => {
-                    return Err(
-                        "promoted_from must not be empty when ownership_mode is promotion"
-                            .to_string(),
-                    );
+                    return Err(OwnershipError::empty_field(
+                        "promoted_from",
+                        Some("promotion"),
+                    ));
                 }
                 _ => { /* lineage reference present and non-empty */ }
             }
@@ -68,21 +163,18 @@ impl Ownership {
 
         // Mirror mode must not carry promotion lineage
         if self.ownership_mode == Some(OwnershipMode::Mirror) && self.promoted_from.is_some() {
-            return Err(
-                "invalid mirror-mode transition: promoted_from is not allowed for mirror ownership"
-                    .to_string(),
-            );
+            return Err(OwnershipError::invalid_transition("promoted_from", "mirror"));
         }
 
         // Mirror mode requires backend_kind to identify the upstream source
         if self.ownership_mode == Some(OwnershipMode::Mirror) && self.backend_kind.is_none() {
-            return Err("backend_kind is required when ownership_mode is mirror".to_string());
+            return Err(OwnershipError::missing_field("backend_kind", "mirror"));
         }
 
         // created_from when set must carry non-empty lineage
         if let Some(ref v) = self.created_from {
             if v.trim().is_empty() {
-                return Err("created_from must not be empty when set".to_string());
+                return Err(OwnershipError::empty_field("created_from", None));
             }
         }
 
@@ -395,5 +487,125 @@ mod tests {
             promoted_from: Some("/state/backends/legacy-sqlite".to_string()),
         };
         assert!(ownership.validate().is_ok());
+    }
+
+    // -- validate_structured error detail tests -----------------------------
+
+    #[test]
+    fn test_validate_structured_missing_promoted_from() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Promotion),
+            backend_kind: Some(BackendKind::Task),
+            created_from: None,
+            promoted_from: None,
+        };
+        let err = ownership.validate_structured().unwrap_err();
+        assert_eq!(err.error, "validation_failed");
+        assert_eq!(err.reason, "missing_field");
+        assert_eq!(err.field.as_deref(), Some("promoted_from"));
+        assert_eq!(err.ownership_mode.as_deref(), Some("promotion"));
+    }
+
+    #[test]
+    fn test_validate_structured_empty_promoted_from() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Promotion),
+            backend_kind: Some(BackendKind::Task),
+            created_from: None,
+            promoted_from: Some("".to_string()),
+        };
+        let err = ownership.validate_structured().unwrap_err();
+        assert_eq!(err.error, "validation_failed");
+        assert_eq!(err.reason, "empty_field");
+        assert_eq!(err.field.as_deref(), Some("promoted_from"));
+        assert_eq!(err.ownership_mode.as_deref(), Some("promotion"));
+    }
+
+    #[test]
+    fn test_validate_structured_missing_backend_kind() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Mirror),
+            backend_kind: None,
+            created_from: None,
+            promoted_from: None,
+        };
+        let err = ownership.validate_structured().unwrap_err();
+        assert_eq!(err.error, "validation_failed");
+        assert_eq!(err.reason, "missing_field");
+        assert_eq!(err.field.as_deref(), Some("backend_kind"));
+        assert_eq!(err.ownership_mode.as_deref(), Some("mirror"));
+    }
+
+    #[test]
+    fn test_validate_structured_invalid_transition() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Mirror),
+            backend_kind: Some(BackendKind::Workflow),
+            created_from: None,
+            promoted_from: Some("task-abc".to_string()),
+        };
+        let err = ownership.validate_structured().unwrap_err();
+        assert_eq!(err.error, "validation_failed");
+        assert_eq!(err.reason, "invalid_transition");
+        assert_eq!(err.field.as_deref(), Some("promoted_from"));
+        assert_eq!(err.ownership_mode.as_deref(), Some("mirror"));
+    }
+
+    #[test]
+    fn test_validate_structured_empty_created_from() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Canonical),
+            backend_kind: None,
+            created_from: Some("".to_string()),
+            promoted_from: None,
+        };
+        let err = ownership.validate_structured().unwrap_err();
+        assert_eq!(err.error, "validation_failed");
+        assert_eq!(err.reason, "empty_field");
+        assert_eq!(err.field.as_deref(), Some("created_from"));
+        assert!(err.ownership_mode.is_none());
+    }
+
+    #[test]
+    fn test_validate_structured_display_matches_validate() {
+        // Verify that OwnershipError Display output matches the string
+        // produced by the original validate() for every failure case.
+        let cases: Vec<Ownership> = vec![
+            Ownership {
+                ownership_mode: Some(OwnershipMode::Promotion),
+                backend_kind: Some(BackendKind::Task),
+                created_from: None,
+                promoted_from: None,
+            },
+            Ownership {
+                ownership_mode: Some(OwnershipMode::Promotion),
+                backend_kind: Some(BackendKind::Task),
+                created_from: None,
+                promoted_from: Some("".to_string()),
+            },
+            Ownership {
+                ownership_mode: Some(OwnershipMode::Mirror),
+                backend_kind: None,
+                created_from: None,
+                promoted_from: None,
+            },
+            Ownership {
+                ownership_mode: Some(OwnershipMode::Mirror),
+                backend_kind: Some(BackendKind::Task),
+                created_from: None,
+                promoted_from: Some("x".to_string()),
+            },
+            Ownership {
+                ownership_mode: Some(OwnershipMode::Canonical),
+                backend_kind: None,
+                created_from: Some("".to_string()),
+                promoted_from: None,
+            },
+        ];
+        for own in cases {
+            let str_err = own.validate().unwrap_err();
+            let structured = own.validate_structured().unwrap_err();
+            assert_eq!(str_err, structured.to_string(), "Display must match validate() for {own:?}");
+        }
     }
 }

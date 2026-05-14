@@ -215,8 +215,12 @@ pub fn delivery_status_ingest_logic(status_str: &str) -> impl IntoResponse + use
 ///
 /// Returns all received ownership fields in the response so that consumers
 /// can verify correct receipt without field loss or semantic drift.
+///
+/// On validation failure, returns a structured JSON error object with
+/// `error`, `reason`, `field`, and `ownership_mode` fields for stable
+/// cross-repo comparison.
 pub fn ownership_ingest_logic(ownership: Ownership) -> impl IntoResponse {
-    match ownership.validate() {
+    match ownership.validate_structured() {
         Ok(()) => {
             let mut response = serde_json::json!({
                 "status": "accepted",
@@ -231,9 +235,9 @@ pub fn ownership_ingest_logic(ownership: Ownership) -> impl IntoResponse {
             }
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
-        Err(msg) => (
+        Err(err) => (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": msg })),
+            Json(serde_json::json!(err)),
         )
             .into_response(),
     }
@@ -835,14 +839,10 @@ mod tests {
         let response = ownership_ingest_logic(ownership).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
-        assert!(
-            body["error"]
-                .as_str()
-                .unwrap()
-                .contains("backend_kind is required when ownership_mode is mirror"),
-            "error: {:?}",
-            body["error"],
-        );
+        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
+        assert_eq!(body["reason"], "missing_field", "reason: {:?}", body["reason"]);
+        assert_eq!(body["field"], "backend_kind", "field: {:?}", body["field"]);
+        assert_eq!(body["ownership_mode"], "mirror", "mode: {:?}", body["ownership_mode"]);
     }
 
     #[tokio::test]
@@ -856,14 +856,10 @@ mod tests {
         let response = ownership_ingest_logic(ownership).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
-        assert!(
-            body["error"]
-                .as_str()
-                .unwrap()
-                .contains("invalid mirror-mode transition"),
-            "error: {:?}",
-            body["error"],
-        );
+        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
+        assert_eq!(body["reason"], "invalid_transition", "reason: {:?}", body["reason"]);
+        assert_eq!(body["field"], "promoted_from", "field: {:?}", body["field"]);
+        assert_eq!(body["ownership_mode"], "mirror", "mode: {:?}", body["ownership_mode"]);
     }
 
     #[tokio::test]
