@@ -103,12 +103,20 @@ async fn submit_task(
 }
 
 /// Pure delegation ingest logic, free of AppState / database dependencies.
+///
+/// Returns all received delegation fields in the response so that consumers
+/// can verify correct receipt without field loss or semantic drift.
 pub fn delegation_ingest_logic(contract: DelegationContract) -> impl IntoResponse {
     match contract.validate() {
         Ok(()) => {
             let response = serde_json::json!({
                 "status": "accepted",
                 "delegation_id": contract.delegation_id,
+                "upstream_work_request_id": contract.upstream_work_request_id,
+                "upstream_task_id": contract.upstream_task_id,
+                "upstream_backend_id": contract.upstream_backend_id,
+                "downstream_domain_kind": contract.downstream_domain_kind,
+                "downstream_graph_id": contract.downstream_graph_id,
             });
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
@@ -416,6 +424,92 @@ mod tests {
             "expected error about empty downstream_domain_kind, got: {:?}",
             body["error"]
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Fixture-baseline roundtrip tests — delegation
+    // -------------------------------------------------------------------
+
+    /// Serialize → deserialize roundtrip preserves all fields for every baseline record.
+    #[test]
+    fn test_all_baseline_delegation_records_serde_roundtrip() {
+        for record in limenet::fixtures::DelegationFixtures::all_baseline_records() {
+            let json = serde_json::to_string(&record).expect("fixture must serialize");
+            let rt: DelegationContract =
+                serde_json::from_str(&json).expect("fixture must deserialize");
+            assert_eq!(rt.delegation_id, record.delegation_id);
+            assert_eq!(rt.upstream_work_request_id, record.upstream_work_request_id);
+            assert_eq!(rt.upstream_task_id, record.upstream_task_id);
+            assert_eq!(rt.upstream_backend_id, record.upstream_backend_id);
+            assert_eq!(rt.downstream_domain_kind, record.downstream_domain_kind);
+            assert_eq!(rt.downstream_graph_id, record.downstream_graph_id);
+        }
+    }
+
+    /// Every baseline delegation record is accepted by the ingest handler.
+    #[tokio::test]
+    async fn test_all_baseline_delegation_records_accepted_by_ingest() {
+        for record in limenet::fixtures::DelegationFixtures::all_baseline_records() {
+            let response = delegation_ingest_logic(record).into_response();
+            assert_eq!(
+                response.status(),
+                StatusCode::ACCEPTED,
+                "all baseline delegation fixtures must be accepted"
+            );
+        }
+    }
+
+    /// Ingest response echoes back all fields for every baseline record.
+    #[tokio::test]
+    async fn test_baseline_delegation_ingest_response_echoes_all_fields() {
+        use limenet::fixtures::DelegationFixtures;
+
+        for (case_name, record) in DelegationFixtures::records_by_case() {
+            let response = delegation_ingest_logic(record.clone()).into_response();
+            assert_eq!(
+                response.status(),
+                StatusCode::ACCEPTED,
+                "case {case_name} must be accepted"
+            );
+            let body = body_to_json(response).await;
+            assert_eq!(body["status"], "accepted", "case {case_name}");
+
+            assert_eq!(
+                body["delegation_id"],
+                serde_json::to_value(&record.delegation_id).unwrap(),
+                "delegation_id mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["upstream_work_request_id"],
+                serde_json::to_value(&record.upstream_work_request_id).unwrap(),
+                "upstream_work_request_id mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["upstream_task_id"],
+                serde_json::to_value(&record.upstream_task_id).unwrap(),
+                "upstream_task_id mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["upstream_backend_id"],
+                serde_json::to_value(&record.upstream_backend_id).unwrap(),
+                "upstream_backend_id mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["downstream_domain_kind"],
+                record.downstream_domain_kind,
+                "downstream_domain_kind mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["downstream_graph_id"],
+                serde_json::to_value(&record.downstream_graph_id).unwrap(),
+                "downstream_graph_id mismatch for {case_name}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
