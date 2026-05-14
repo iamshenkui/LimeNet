@@ -7,8 +7,8 @@ use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
 use limenet::contracts::{
-    BackendKind, ClaimRequest, DelegationContract, DeliveryPackage, DeliveryStatus, EvidenceRollup,
-    HeartbeatRequest, Ownership, OwnershipMode, PackageType,
+    ClaimRequest, DelegationContract, DeliveryPackage, DeliveryStatus, EvidenceRollup,
+    HeartbeatRequest, Ownership,
 };
 use limenet::state::{
     BackoffAwakener, BatchError, BatchTaskInput, DependencyResolver, HeartbeatError, LeaseReaper,
@@ -174,17 +174,22 @@ pub fn delivery_status_ingest_logic(status: DeliveryStatus) -> impl IntoResponse
 }
 
 /// Pure ownership ingest logic, free of AppState / database dependencies.
+///
+/// Returns all received ownership fields in the response so that consumers
+/// can verify correct receipt without field loss or semantic drift.
 pub fn ownership_ingest_logic(ownership: Ownership) -> impl IntoResponse {
     match ownership.validate() {
         Ok(()) => {
-            let promoted_from = ownership.promoted_from.as_deref();
             let mut response = serde_json::json!({
                 "status": "accepted",
                 "ownership_mode": ownership.ownership_mode,
+                "backend_kind": ownership.backend_kind,
             });
-            // Include lineage reference when promotion is evaluated
-            if ownership.ownership_mode == Some(OwnershipMode::Promotion) {
-                response["promoted_from"] = serde_json::json!(promoted_from);
+            if let Some(ref v) = ownership.created_from {
+                response["created_from"] = serde_json::json!(v);
+            }
+            if let Some(ref v) = ownership.promoted_from {
+                response["promoted_from"] = serde_json::json!(v);
             }
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
@@ -283,6 +288,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::Response;
     use http_body_util::BodyExt;
+    use limenet::contracts::{BackendKind, OwnershipMode, PackageType};
 
     /// Convert a `Response<Body>` into a JSON value for assertion convenience.
     async fn body_to_json(response: Response<Body>) -> serde_json::Value {
@@ -683,5 +689,94 @@ mod tests {
         let body = body_to_json(response).await;
         assert_eq!(body["status"], "accepted");
         assert_eq!(body["ownership_mode"], serde_json::Value::Null);
+    }
+
+    // -------------------------------------------------------------------
+    // Fixture-baseline roundtrip tests — verify that every baseline
+    // ownership record survives serialization, deserialization, and
+    // ingest without field loss or semantic drift.
+    // -------------------------------------------------------------------
+
+    /// Serialize → deserialize roundtrip preserves all fields for every baseline record.
+    #[test]
+    fn test_all_baseline_records_serde_roundtrip() {
+        for record in limenet::fixtures::OwnershipFixtures::all_baseline_records() {
+            let json = serde_json::to_string(&record).expect("fixture must serialize");
+            let rt: Ownership = serde_json::from_str(&json).expect("fixture must deserialize");
+            assert_eq!(rt.ownership_mode, record.ownership_mode);
+            assert_eq!(rt.backend_kind, record.backend_kind);
+            assert_eq!(rt.created_from, record.created_from);
+            assert_eq!(rt.promoted_from, record.promoted_from);
+        }
+    }
+
+    /// Every baseline record is accepted by the ingest handler.
+    #[tokio::test]
+    async fn test_all_baseline_records_accepted_by_ingest() {
+        for record in limenet::fixtures::OwnershipFixtures::all_baseline_records() {
+            let response = ownership_ingest_logic(record).into_response();
+            assert_eq!(
+                response.status(),
+                StatusCode::ACCEPTED,
+                "all baseline fixtures must be accepted"
+            );
+        }
+    }
+
+    /// Ingest response echoes back all non-None fields for every baseline record.
+    #[tokio::test]
+    async fn test_baseline_ingest_response_echoes_all_fields() {
+        use limenet::fixtures::OwnershipFixtures;
+
+        for (case_name, record) in OwnershipFixtures::records_by_lineage_case() {
+            let response = ownership_ingest_logic(record.clone()).into_response();
+            assert_eq!(
+                response.status(),
+                StatusCode::ACCEPTED,
+                "case {case_name} must be accepted"
+            );
+            let body = body_to_json(response).await;
+            assert_eq!(body["status"], "accepted", "case {case_name}");
+
+            // ownership_mode must match the serialized form
+            let expected_mode = serde_json::to_value(&record.ownership_mode).unwrap();
+            assert_eq!(
+                body["ownership_mode"], expected_mode,
+                "ownership_mode mismatch for {case_name}"
+            );
+
+            // backend_kind must match
+            let expected_backend = serde_json::to_value(&record.backend_kind).unwrap();
+            assert_eq!(
+                body["backend_kind"], expected_backend,
+                "backend_kind mismatch for {case_name}"
+            );
+
+            // created_from echoed when present
+            match &record.created_from {
+                Some(v) => assert_eq!(
+                    body["created_from"].as_str(),
+                    Some(v.as_str()),
+                    "created_from mismatch for {case_name}"
+                ),
+                None => assert!(
+                    body.get("created_from").is_none(),
+                    "created_from must be absent for {case_name}"
+                ),
+            }
+
+            // promoted_from echoed when present (regardless of mode)
+            match &record.promoted_from {
+                Some(v) => assert_eq!(
+                    body["promoted_from"].as_str(),
+                    Some(v.as_str()),
+                    "promoted_from mismatch for {case_name}"
+                ),
+                None => assert!(
+                    body.get("promoted_from").is_none(),
+                    "promoted_from must be absent for {case_name}"
+                ),
+            }
+        }
     }
 }
