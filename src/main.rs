@@ -556,6 +556,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Mirror),
             backend_kind: Some(BackendKind::Workflow),
+            created_from: None,
             promoted_from: None,
         };
         let response = ownership_ingest_logic(ownership).into_response();
@@ -570,6 +571,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Canonical),
             backend_kind: Some(BackendKind::Task),
+            created_from: None,
             promoted_from: None,
         };
         let response = ownership_ingest_logic(ownership).into_response();
@@ -584,6 +586,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Promotion),
             backend_kind: Some(BackendKind::Task),
+            created_from: None,
             promoted_from: Some("task-001".into()),
         };
         let response = ownership_ingest_logic(ownership).into_response();
@@ -599,6 +602,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Promotion),
             backend_kind: Some(BackendKind::Task),
+            created_from: None,
             promoted_from: Some("graph-node-42".into()),
         };
         let response = ownership_ingest_logic(ownership).into_response();
@@ -613,6 +617,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Canonical),
             backend_kind: Some(BackendKind::Task),
+            created_from: None,
             promoted_from: None,
         };
         let response = ownership_ingest_logic(ownership).into_response();
@@ -628,6 +633,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Mirror),
             backend_kind: None,
+            created_from: None,
             promoted_from: None,
         };
         let response = ownership_ingest_logic(ownership).into_response();
@@ -648,6 +654,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Mirror),
             backend_kind: Some(BackendKind::Workflow),
+            created_from: None,
             promoted_from: Some("task-abc".into()),
         };
         let response = ownership_ingest_logic(ownership).into_response();
@@ -668,6 +675,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: None,
             backend_kind: None,
+            created_from: None,
             promoted_from: None,
         };
         let response = ownership_ingest_logic(ownership).into_response();

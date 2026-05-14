@@ -32,6 +32,11 @@ pub struct Ownership {
     #[serde(default)]
     pub backend_kind: Option<BackendKind>,
 
+    /// Graph or task identifier this ownership was derived from
+    /// (empty when the graph is original)
+    #[serde(default)]
+    pub created_from: Option<String>,
+
     /// Reference to the source this task was promoted from
     #[serde(default)]
     pub promoted_from: Option<String>,
@@ -61,8 +66,7 @@ impl Ownership {
             }
         }
 
-        // Mirror mode must not carry promotion lineage — check before the
-        // generic promoted_from guard so mirror-specific errors surface first
+        // Mirror mode must not carry promotion lineage
         if self.ownership_mode == Some(OwnershipMode::Mirror) && self.promoted_from.is_some() {
             return Err(
                 "invalid mirror-mode transition: promoted_from is not allowed for mirror ownership"
@@ -70,14 +74,16 @@ impl Ownership {
             );
         }
 
-        // promoted_from without promotion mode is a lineage inconsistency
-        if self.promoted_from.is_some() && self.ownership_mode != Some(OwnershipMode::Promotion) {
-            return Err("ownership_mode must be promotion when promoted_from is set".to_string());
-        }
-
         // Mirror mode requires backend_kind to identify the upstream source
         if self.ownership_mode == Some(OwnershipMode::Mirror) && self.backend_kind.is_none() {
             return Err("backend_kind is required when ownership_mode is mirror".to_string());
+        }
+
+        // created_from when set must carry non-empty lineage
+        if let Some(ref v) = self.created_from {
+            if v.trim().is_empty() {
+                return Err("created_from must not be empty when set".to_string());
+            }
         }
 
         Ok(())
@@ -93,6 +99,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Canonical),
             backend_kind: Some(BackendKind::Task),
+            created_from: None,
             promoted_from: None,
         };
         assert!(ownership.validate().is_ok());
@@ -103,6 +110,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Mirror),
             backend_kind: Some(BackendKind::Workflow),
+            created_from: None,
             promoted_from: None,
         };
         assert!(ownership.validate().is_ok());
@@ -113,6 +121,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Promotion),
             backend_kind: Some(BackendKind::Task),
+            created_from: None,
             promoted_from: Some("task-abc-123".to_string()),
         };
         assert!(ownership.validate().is_ok());
@@ -123,6 +132,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Promotion),
             backend_kind: Some(BackendKind::Task),
+            created_from: None,
             promoted_from: None,
         };
         let err = ownership.validate().unwrap_err();
@@ -130,17 +140,16 @@ mod tests {
     }
 
     #[test]
-    fn test_promoted_from_without_promotion_mode_is_invalid() {
+    fn test_canonical_with_promoted_from_is_valid() {
+        // Per meta-agent baseline: canonical mode may carry promoted_from
+        // for historical lineage tracking (e.g. LOCAL_CANONICAL_DERIVED_PROMOTED)
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Canonical),
             backend_kind: None,
+            created_from: None,
             promoted_from: Some("task-abc-123".to_string()),
         };
-        let err = ownership.validate().unwrap_err();
-        assert!(
-            err.contains("ownership_mode must be promotion"),
-            "error: {err}"
-        );
+        assert!(ownership.validate().is_ok());
     }
 
     #[test]
@@ -148,6 +157,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: None,
             backend_kind: None,
+            created_from: None,
             promoted_from: None,
         };
         assert!(ownership.validate().is_ok());
@@ -176,12 +186,14 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Promotion),
             backend_kind: Some(BackendKind::Task),
+            created_from: Some("parent-graph".to_string()),
             promoted_from: Some("task-xyz".to_string()),
         };
         let json = serde_json::to_string(&ownership).unwrap();
         let deserialized: Ownership = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.ownership_mode, Some(OwnershipMode::Promotion));
         assert_eq!(deserialized.backend_kind, Some(BackendKind::Task));
+        assert_eq!(deserialized.created_from, Some("parent-graph".to_string()));
         assert_eq!(deserialized.promoted_from, Some("task-xyz".to_string()));
     }
 
@@ -190,6 +202,7 @@ mod tests {
         let ownership: Ownership = serde_json::from_str("{}").unwrap();
         assert!(ownership.ownership_mode.is_none());
         assert!(ownership.backend_kind.is_none());
+        assert!(ownership.created_from.is_none());
         assert!(ownership.promoted_from.is_none());
     }
 
@@ -199,6 +212,7 @@ mod tests {
             serde_json::from_str(r#"{"ownership_mode":"canonical"}"#).unwrap();
         assert_eq!(ownership.ownership_mode, Some(OwnershipMode::Canonical));
         assert!(ownership.backend_kind.is_none());
+        assert!(ownership.created_from.is_none());
         assert!(ownership.promoted_from.is_none());
     }
 
@@ -207,6 +221,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Promotion),
             backend_kind: Some(BackendKind::Task),
+            created_from: None,
             promoted_from: Some("".to_string()),
         };
         let err = ownership.validate().unwrap_err();
@@ -221,6 +236,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Promotion),
             backend_kind: Some(BackendKind::Task),
+            created_from: None,
             promoted_from: Some("   ".to_string()),
         };
         let err = ownership.validate().unwrap_err();
@@ -237,6 +253,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Mirror),
             backend_kind: None,
+            created_from: None,
             promoted_from: None,
         };
         let err = ownership.validate().unwrap_err();
@@ -251,6 +268,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Mirror),
             backend_kind: Some(BackendKind::Workflow),
+            created_from: None,
             promoted_from: Some("task-abc".to_string()),
         };
         let err = ownership.validate().unwrap_err();
@@ -265,6 +283,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Mirror),
             backend_kind: Some(BackendKind::Task),
+            created_from: None,
             promoted_from: None,
         };
         assert!(ownership.validate().is_ok());
@@ -275,6 +294,7 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Mirror),
             backend_kind: Some(BackendKind::Workflow),
+            created_from: None,
             promoted_from: None,
         };
         assert!(ownership.validate().is_ok());
@@ -286,7 +306,93 @@ mod tests {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Canonical),
             backend_kind: None,
+            created_from: None,
             promoted_from: None,
+        };
+        assert!(ownership.validate().is_ok());
+    }
+
+    // -- created_from lineage tests ---------------------------------------
+
+    #[test]
+    fn test_created_from_with_canonical_is_valid() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Canonical),
+            backend_kind: Some(BackendKind::Task),
+            created_from: Some("parent-integration-graph".to_string()),
+            promoted_from: None,
+        };
+        assert!(ownership.validate().is_ok());
+    }
+
+    #[test]
+    fn test_created_from_with_mirror_is_valid() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Mirror),
+            backend_kind: Some(BackendKind::Workflow),
+            created_from: Some("parent-integration-graph".to_string()),
+            promoted_from: None,
+        };
+        assert!(ownership.validate().is_ok());
+    }
+
+    #[test]
+    fn test_created_from_with_promotion_is_valid() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Promotion),
+            backend_kind: Some(BackendKind::Task),
+            created_from: Some("parent-integration-graph".to_string()),
+            promoted_from: Some("task-abc".to_string()),
+        };
+        assert!(ownership.validate().is_ok());
+    }
+
+    #[test]
+    fn test_created_from_empty_is_invalid() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Canonical),
+            backend_kind: None,
+            created_from: Some("".to_string()),
+            promoted_from: None,
+        };
+        let err = ownership.validate().unwrap_err();
+        assert!(err.contains("created_from"), "error: {err}");
+    }
+
+    #[test]
+    fn test_created_from_whitespace_is_invalid() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Canonical),
+            backend_kind: None,
+            created_from: Some("   ".to_string()),
+            promoted_from: None,
+        };
+        let err = ownership.validate().unwrap_err();
+        assert!(err.contains("created_from"), "error: {err}");
+    }
+
+    #[test]
+    fn test_full_lineage_baseline_case() {
+        // Corresponds to meta-agent LOCAL_CANONICAL_DERIVED_PROMOTED:
+        // canonical mode with both created_from and promoted_from set
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Canonical),
+            backend_kind: Some(BackendKind::Task),
+            created_from: Some("parent-integration-graph".to_string()),
+            promoted_from: Some("/state/backends/legacy-sqlite".to_string()),
+        };
+        assert!(ownership.validate().is_ok());
+    }
+
+    #[test]
+    fn test_promotion_derived_transfer_baseline_case() {
+        // Corresponds to meta-agent PROMOTION_DERIVED_TRANSFER:
+        // promotion mode with both created_from and promoted_from set
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::Promotion),
+            backend_kind: Some(BackendKind::Task),
+            created_from: Some("parent-integration-graph".to_string()),
+            promoted_from: Some("/state/backends/legacy-sqlite".to_string()),
         };
         assert!(ownership.validate().is_ok());
     }
