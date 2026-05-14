@@ -18,6 +18,19 @@ use crate::contracts::DelegationContract;
 fn full_delegation_chain_graph() -> DelegationContract {
     DelegationContract {
         delegation_id: Some("del-full-chain-graph".into()),
+        upstream_domain_id: Some("limenet".into()),
+        downstream_domain_id: Some("local-meta-agent".into()),
+        delivery_contract_id: Some("dc-integration-001".into()),
+        visibility_policy: Some(
+            crate::contracts::VisibilityPolicy::Shared,
+        ),
+        evidence_rollup_policy: Some(
+            crate::contracts::EvidenceRollupPolicy::Summary,
+        ),
+        status_mapping_policy: Some(
+            crate::contracts::StatusMappingPolicy::Strict,
+        ),
+        trace_context: None,
         upstream_work_request_id: Some("wr-integration-001".into()),
         upstream_task_id: Some("task-integration-001".into()),
         upstream_backend_id: Some("backend-integration-alpha".into()),
@@ -29,6 +42,19 @@ fn full_delegation_chain_graph() -> DelegationContract {
 fn full_delegation_chain_mesh() -> DelegationContract {
     DelegationContract {
         delegation_id: Some("del-full-chain-mesh".into()),
+        upstream_domain_id: Some("limenet".into()),
+        downstream_domain_id: Some("local-meta-agent".into()),
+        delivery_contract_id: Some("dc-integration-001".into()),
+        visibility_policy: Some(
+            crate::contracts::VisibilityPolicy::Shared,
+        ),
+        evidence_rollup_policy: Some(
+            crate::contracts::EvidenceRollupPolicy::Summary,
+        ),
+        status_mapping_policy: Some(
+            crate::contracts::StatusMappingPolicy::Strict,
+        ),
+        trace_context: None,
         upstream_work_request_id: Some("wr-integration-001".into()),
         upstream_task_id: Some("task-integration-001".into()),
         upstream_backend_id: Some("backend-integration-alpha".into()),
@@ -44,6 +70,19 @@ fn full_delegation_chain_mesh() -> DelegationContract {
 fn upstream_identity_anchors() -> DelegationContract {
     DelegationContract {
         delegation_id: Some("del-upstream-identity".into()),
+        upstream_domain_id: Some("limenet".into()),
+        downstream_domain_id: Some("local-meta-agent".into()),
+        delivery_contract_id: Some("dc-integration-001".into()),
+        visibility_policy: Some(
+            crate::contracts::VisibilityPolicy::Shared,
+        ),
+        evidence_rollup_policy: Some(
+            crate::contracts::EvidenceRollupPolicy::Summary,
+        ),
+        status_mapping_policy: Some(
+            crate::contracts::StatusMappingPolicy::Strict,
+        ),
+        trace_context: None,
         upstream_work_request_id: Some("wr-integration-001".into()),
         upstream_task_id: Some("task-integration-001".into()),
         upstream_backend_id: Some("backend-integration-alpha".into()),
@@ -55,6 +94,19 @@ fn upstream_identity_anchors() -> DelegationContract {
 fn backend_work_request_chain() -> DelegationContract {
     DelegationContract {
         delegation_id: Some("del-backend-wr-chain".into()),
+        upstream_domain_id: Some("limenet".into()),
+        downstream_domain_id: Some("local-meta-agent".into()),
+        delivery_contract_id: Some("dc-integration-001".into()),
+        visibility_policy: Some(
+            crate::contracts::VisibilityPolicy::Shared,
+        ),
+        evidence_rollup_policy: Some(
+            crate::contracts::EvidenceRollupPolicy::Summary,
+        ),
+        status_mapping_policy: Some(
+            crate::contracts::StatusMappingPolicy::Strict,
+        ),
+        trace_context: None,
         upstream_work_request_id: Some("wr-integration-001".into()),
         upstream_task_id: None,
         upstream_backend_id: Some("backend-integration-alpha".into()),
@@ -66,6 +118,19 @@ fn backend_work_request_chain() -> DelegationContract {
 fn backend_anchored() -> DelegationContract {
     DelegationContract {
         delegation_id: Some("del-backend-anchored".into()),
+        upstream_domain_id: Some("limenet".into()),
+        downstream_domain_id: Some("local-meta-agent".into()),
+        delivery_contract_id: Some("dc-integration-001".into()),
+        visibility_policy: Some(
+            crate::contracts::VisibilityPolicy::Shared,
+        ),
+        evidence_rollup_policy: Some(
+            crate::contracts::EvidenceRollupPolicy::Summary,
+        ),
+        status_mapping_policy: Some(
+            crate::contracts::StatusMappingPolicy::Strict,
+        ),
+        trace_context: None,
         upstream_work_request_id: None,
         upstream_task_id: None,
         upstream_backend_id: Some("backend-integration-alpha".into()),
@@ -81,6 +146,19 @@ fn backend_anchored() -> DelegationContract {
 fn downstream_target_graph() -> DelegationContract {
     DelegationContract {
         delegation_id: Some("del-downstream-graph".into()),
+        upstream_domain_id: None,
+        downstream_domain_id: Some("local-meta-agent".into()),
+        delivery_contract_id: Some("dc-integration-001".into()),
+        visibility_policy: Some(
+            crate::contracts::VisibilityPolicy::Shared,
+        ),
+        evidence_rollup_policy: Some(
+            crate::contracts::EvidenceRollupPolicy::Summary,
+        ),
+        status_mapping_policy: Some(
+            crate::contracts::StatusMappingPolicy::Strict,
+        ),
+        trace_context: None,
         upstream_work_request_id: None,
         upstream_task_id: None,
         upstream_backend_id: None,
@@ -92,6 +170,19 @@ fn downstream_target_graph() -> DelegationContract {
 fn downstream_target_mesh() -> DelegationContract {
     DelegationContract {
         delegation_id: Some("del-downstream-mesh".into()),
+        upstream_domain_id: None,
+        downstream_domain_id: Some("local-meta-agent".into()),
+        delivery_contract_id: Some("dc-integration-001".into()),
+        visibility_policy: Some(
+            crate::contracts::VisibilityPolicy::Shared,
+        ),
+        evidence_rollup_policy: Some(
+            crate::contracts::EvidenceRollupPolicy::Summary,
+        ),
+        status_mapping_policy: Some(
+            crate::contracts::StatusMappingPolicy::Strict,
+        ),
+        trace_context: None,
         upstream_work_request_id: None,
         upstream_task_id: None,
         upstream_backend_id: None,
@@ -107,6 +198,13 @@ fn downstream_target_mesh() -> DelegationContract {
 fn minimal_delegation() -> DelegationContract {
     DelegationContract {
         delegation_id: None,
+        upstream_domain_id: None,
+        downstream_domain_id: None,
+        delivery_contract_id: None,
+        visibility_policy: None,
+        evidence_rollup_policy: None,
+        status_mapping_policy: None,
+        trace_context: None,
         upstream_work_request_id: None,
         upstream_task_id: None,
         upstream_backend_id: None,

@@ -1,17 +1,96 @@
-use serde::{Deserialize, Serialize};
+use crate::contracts::delivery::TraceContext;
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
+
+/// Deserialize an `Option<String>` from a JSON value, treating empty
+/// strings as `None` so that Python's `""` sentinel for unset identity
+/// anchors maps cleanly to Rust's `Option::None` (GAP-DEL-01).
+fn deserialize_empty_string_as_none<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    Ok(opt.filter(|s| !s.is_empty()))
+}
+
+/// Visibility policy governing how delegated work is exposed across domains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisibilityPolicy {
+    /// Delegated work is visible only within the upstream domain.
+    Private,
+    /// Delegated work is visible in both upstream and downstream domains.
+    Shared,
+    /// Delegated work is fully visible downstream.
+    Public,
+}
+
+impl fmt::Display for VisibilityPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Private => f.write_str("private"),
+            Self::Shared => f.write_str("shared"),
+            Self::Public => f.write_str("public"),
+        }
+    }
+}
+
+/// Evidence rollup policy governing how evidence is aggregated and propagated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceRollupPolicy {
+    /// No evidence is rolled up across domains.
+    None,
+    /// Only summary-level evidence is rolled up.
+    Summary,
+    /// All evidence is rolled up in full.
+    Full,
+}
+
+impl fmt::Display for EvidenceRollupPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("none"),
+            Self::Summary => f.write_str("summary"),
+            Self::Full => f.write_str("full"),
+        }
+    }
+}
+
+/// Status mapping policy governing how task statuses are translated across domains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusMappingPolicy {
+    /// 1:1 status mapping with exact correspondence.
+    Strict,
+    /// Best-effort mapping allowing partial correspondence.
+    Loose,
+    /// Pass through statuses as-is without translation.
+    Passthrough,
+}
+
+impl fmt::Display for StatusMappingPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Strict => f.write_str("strict"),
+            Self::Loose => f.write_str("loose"),
+            Self::Passthrough => f.write_str("passthrough"),
+        }
+    }
+}
 
 /// Structured delegation validation error for cross-repo integration comparison.
 ///
 /// Each error carries a stable `error` discriminator (`"validation_failed"`),
-/// a `reason` classifying the failure (`missing_field`, `empty_field`),
-/// the `field` involved, and the `anchor` context (`upstream` or `downstream`)
-/// identifying which identity anchor group caused the failure.
+/// a `reason` classifying the failure (`missing_field`, `empty_field`,
+/// `unsupported_policy`), the `field` involved, and the `anchor` context
+/// (`upstream` or `downstream`) identifying which identity anchor group
+/// caused the failure.
 #[derive(Debug, Clone, Serialize)]
 pub struct DelegationError {
     /// Stable error discriminator — always `"validation_failed"`.
     pub error: String,
-    /// Structured reason: `"missing_field"` or `"empty_field"`.
+    /// Structured reason: `"missing_field"`, `"empty_field"`, or `"unsupported_policy"`.
     pub reason: String,
     /// The field that caused the validation failure.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -39,6 +118,15 @@ impl DelegationError {
             anchor: Some(anchor.into()),
         }
     }
+
+    fn unsupported_policy(field: &str, value: &str) -> Self {
+        Self {
+            error: "validation_failed".into(),
+            reason: "unsupported_policy".into(),
+            field: Some(field.into()),
+            anchor: Some(value.into()),
+        }
+    }
 }
 
 impl fmt::Display for DelegationError {
@@ -62,6 +150,10 @@ impl fmt::Display for DelegationError {
                     "downstream_domain_kind must not be empty when downstream_graph_id is set"
                 )
             }
+            ("unsupported_policy", Some(field)) => {
+                let value = self.anchor.as_deref().unwrap_or("");
+                write!(f, "unsupported {field}: {value}")
+            }
             _ => write!(f, "delegation validation failed"),
         }
     }
@@ -72,29 +164,61 @@ impl fmt::Display for DelegationError {
 /// Upstream identity anchors tie this delegation back to the original
 /// work request and backend that spawned it.  Downstream fields
 /// describe the target domain and (optionally) the target graph.
+///
+/// Matches the shared Phase 2B wire shape emitted by the meta-agent
+/// Python `DelegationContract` dataclass.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegationContract {
     /// Unique identifier for this delegation
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_empty_string_as_none")]
     pub delegation_id: Option<String>,
 
-    /// Upstream work request that triggered this delegation
+    /// Upstream domain identifier (e.g. "limenet")
+    #[serde(default, deserialize_with = "deserialize_empty_string_as_none")]
+    pub upstream_domain_id: Option<String>,
+
+    /// Downstream domain identifier (e.g. "local-meta-agent")
+    #[serde(default, deserialize_with = "deserialize_empty_string_as_none")]
+    pub downstream_domain_id: Option<String>,
+
+    /// Stable identifier for the delivery contract instance
+    #[serde(default, deserialize_with = "deserialize_empty_string_as_none")]
+    pub delivery_contract_id: Option<String>,
+
+    /// Visibility policy governing how delegated work is exposed across domains
     #[serde(default)]
+    pub visibility_policy: Option<VisibilityPolicy>,
+
+    /// Evidence rollup policy governing how evidence is aggregated and propagated
+    #[serde(default)]
+    pub evidence_rollup_policy: Option<EvidenceRollupPolicy>,
+
+    /// Status mapping policy governing how task statuses are translated across domains
+    #[serde(default)]
+    pub status_mapping_policy: Option<StatusMappingPolicy>,
+
+    /// In-process trace context for causation tracking
+    #[serde(default)]
+    pub trace_context: Option<TraceContext>,
+
+    /// Upstream work request that triggered this delegation
+    #[serde(default, deserialize_with = "deserialize_empty_string_as_none")]
     pub upstream_work_request_id: Option<String>,
 
     /// Upstream task that produced this delegation
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_empty_string_as_none")]
     pub upstream_task_id: Option<String>,
 
     /// Upstream backend that originated this delegation
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_empty_string_as_none")]
     pub upstream_backend_id: Option<String>,
 
     /// Target domain kind for this delegation (e.g. "graph", "mesh")
+    #[serde(default)]
     pub downstream_domain_kind: String,
 
     /// Target graph within the downstream domain
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_empty_string_as_none")]
     pub downstream_graph_id: Option<String>,
 }
 
@@ -150,6 +274,13 @@ mod tests {
         let json = r#"{"downstream_domain_kind":"graph"}"#;
         let contract: DelegationContract = serde_json::from_str(json).unwrap();
         assert!(contract.delegation_id.is_none());
+        assert!(contract.upstream_domain_id.is_none());
+        assert!(contract.downstream_domain_id.is_none());
+        assert!(contract.delivery_contract_id.is_none());
+        assert!(contract.visibility_policy.is_none());
+        assert!(contract.evidence_rollup_policy.is_none());
+        assert!(contract.status_mapping_policy.is_none());
+        assert!(contract.trace_context.is_none());
         assert!(contract.upstream_work_request_id.is_none());
         assert!(contract.upstream_task_id.is_none());
         assert!(contract.upstream_backend_id.is_none());
@@ -162,6 +293,13 @@ mod tests {
         let json = r#"{"delegation_id":"del-001","downstream_domain_kind":"mesh"}"#;
         let contract: DelegationContract = serde_json::from_str(json).unwrap();
         assert_eq!(contract.delegation_id, Some("del-001".to_string()));
+        assert!(contract.upstream_domain_id.is_none());
+        assert!(contract.downstream_domain_id.is_none());
+        assert!(contract.delivery_contract_id.is_none());
+        assert!(contract.visibility_policy.is_none());
+        assert!(contract.evidence_rollup_policy.is_none());
+        assert!(contract.status_mapping_policy.is_none());
+        assert!(contract.trace_context.is_none());
         assert!(contract.upstream_work_request_id.is_none());
         assert!(contract.upstream_task_id.is_none());
         assert!(contract.upstream_backend_id.is_none());
@@ -170,9 +308,100 @@ mod tests {
     }
 
     #[test]
+    fn test_deserialize_with_policy_fields() {
+        let json = r#"{
+            "delegation_id":"del-001",
+            "upstream_domain_id":"limenet",
+            "downstream_domain_id":"local-meta-agent",
+            "delivery_contract_id":"dc-001",
+            "visibility_policy":"shared",
+            "evidence_rollup_policy":"summary",
+            "status_mapping_policy":"strict",
+            "trace_context":{"correlation_id":"corr-001"},
+            "downstream_domain_kind":"meta-agent"
+        }"#;
+        let contract: DelegationContract = serde_json::from_str(json).unwrap();
+        assert_eq!(contract.delegation_id, Some("del-001".to_string()));
+        assert_eq!(contract.upstream_domain_id, Some("limenet".to_string()));
+        assert_eq!(contract.downstream_domain_id, Some("local-meta-agent".to_string()));
+        assert_eq!(contract.delivery_contract_id, Some("dc-001".to_string()));
+        assert_eq!(contract.visibility_policy, Some(VisibilityPolicy::Shared));
+        assert_eq!(
+            contract.evidence_rollup_policy,
+            Some(EvidenceRollupPolicy::Summary)
+        );
+        assert_eq!(
+            contract.status_mapping_policy,
+            Some(StatusMappingPolicy::Strict)
+        );
+        assert!(contract.trace_context.is_some());
+        assert_eq!(
+            contract.trace_context.as_ref().unwrap().correlation_id,
+            Some("corr-001".to_string())
+        );
+        assert_eq!(contract.downstream_domain_kind, "meta-agent");
+    }
+
+    #[test]
+    fn test_deserialize_all_policy_variants() {
+        let cases = [
+            ("private", VisibilityPolicy::Private),
+            ("shared", VisibilityPolicy::Shared),
+            ("public", VisibilityPolicy::Public),
+        ];
+        for (json_val, expected) in cases {
+            let json = format!(r#"{{"visibility_policy":"{json_val}","downstream_domain_kind":"g"}}"#);
+            let contract: DelegationContract = serde_json::from_str(&json).unwrap();
+            assert_eq!(contract.visibility_policy, Some(expected), "for {json_val}");
+        }
+
+        let evidence_cases = [
+            ("none", EvidenceRollupPolicy::None),
+            ("summary", EvidenceRollupPolicy::Summary),
+            ("full", EvidenceRollupPolicy::Full),
+        ];
+        for (json_val, expected) in evidence_cases {
+            let json = format!(r#"{{"evidence_rollup_policy":"{json_val}","downstream_domain_kind":"g"}}"#);
+            let contract: DelegationContract = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                contract.evidence_rollup_policy,
+                Some(expected),
+                "for {json_val}"
+            );
+        }
+
+        let status_cases = [
+            ("strict", StatusMappingPolicy::Strict),
+            ("loose", StatusMappingPolicy::Loose),
+            ("passthrough", StatusMappingPolicy::Passthrough),
+        ];
+        for (json_val, expected) in status_cases {
+            let json = format!(r#"{{"status_mapping_policy":"{json_val}","downstream_domain_kind":"g"}}"#);
+            let contract: DelegationContract = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                contract.status_mapping_policy,
+                Some(expected),
+                "for {json_val}"
+            );
+        }
+    }
+
+    #[test]
     fn test_serde_roundtrip() {
         let contract = DelegationContract {
             delegation_id: Some("del-001".to_string()),
+            upstream_domain_id: Some("limenet".to_string()),
+            downstream_domain_id: Some("local-meta-agent".to_string()),
+            delivery_contract_id: Some("dc-001".to_string()),
+            visibility_policy: Some(VisibilityPolicy::Shared),
+            evidence_rollup_policy: Some(EvidenceRollupPolicy::Summary),
+            status_mapping_policy: Some(StatusMappingPolicy::Strict),
+            trace_context: Some(TraceContext {
+                correlation_id: Some("corr-001".into()),
+                task_id: None,
+                attempt_id: None,
+                last_event_id: None,
+            }),
             upstream_work_request_id: Some("wr-001".to_string()),
             upstream_task_id: Some("task-001".to_string()),
             upstream_backend_id: Some("backend-alpha".to_string()),
@@ -182,6 +411,28 @@ mod tests {
         let json = serde_json::to_string(&contract).unwrap();
         let deserialized: DelegationContract = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.delegation_id, Some("del-001".to_string()));
+        assert_eq!(
+            deserialized.upstream_domain_id,
+            Some("limenet".to_string())
+        );
+        assert_eq!(
+            deserialized.downstream_domain_id,
+            Some("local-meta-agent".to_string())
+        );
+        assert_eq!(
+            deserialized.delivery_contract_id,
+            Some("dc-001".to_string())
+        );
+        assert_eq!(deserialized.visibility_policy, Some(VisibilityPolicy::Shared));
+        assert_eq!(
+            deserialized.evidence_rollup_policy,
+            Some(EvidenceRollupPolicy::Summary)
+        );
+        assert_eq!(
+            deserialized.status_mapping_policy,
+            Some(StatusMappingPolicy::Strict)
+        );
+        assert!(deserialized.trace_context.is_some());
         assert_eq!(
             deserialized.upstream_work_request_id,
             Some("wr-001".to_string())
@@ -211,6 +462,13 @@ mod tests {
     fn test_upstream_work_request_requires_backend_id() {
         let contract = DelegationContract {
             delegation_id: Some("del-001".to_string()),
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: Some("wr-001".to_string()),
             upstream_task_id: None,
             upstream_backend_id: None,
@@ -228,6 +486,13 @@ mod tests {
     fn test_upstream_task_requires_work_request_id() {
         let contract = DelegationContract {
             delegation_id: Some("del-001".to_string()),
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: None,
             upstream_task_id: Some("task-001".to_string()),
             upstream_backend_id: Some("backend-alpha".to_string()),
@@ -245,6 +510,13 @@ mod tests {
     fn test_all_upstream_fields_present_is_valid() {
         let contract = DelegationContract {
             delegation_id: Some("del-001".to_string()),
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: Some("wr-001".to_string()),
             upstream_task_id: Some("task-001".to_string()),
             upstream_backend_id: Some("backend-alpha".to_string()),
@@ -258,6 +530,13 @@ mod tests {
     fn test_upstream_backend_id_alone_is_valid() {
         let contract = DelegationContract {
             delegation_id: None,
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: None,
             upstream_task_id: None,
             upstream_backend_id: Some("backend-alpha".to_string()),
@@ -271,6 +550,13 @@ mod tests {
     fn test_no_upstream_fields_is_valid() {
         let contract = DelegationContract {
             delegation_id: None,
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: None,
             upstream_task_id: None,
             upstream_backend_id: None,
@@ -288,6 +574,13 @@ mod tests {
     fn test_downstream_graph_id_requires_non_empty_domain_kind() {
         let contract = DelegationContract {
             delegation_id: None,
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: None,
             upstream_task_id: None,
             upstream_backend_id: None,
@@ -305,6 +598,13 @@ mod tests {
     fn test_downstream_graph_id_with_valid_domain_kind_is_valid() {
         let contract = DelegationContract {
             delegation_id: None,
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: None,
             upstream_task_id: None,
             upstream_backend_id: None,
@@ -318,6 +618,13 @@ mod tests {
     fn test_no_downstream_graph_id_with_empty_domain_kind_is_valid() {
         let contract = DelegationContract {
             delegation_id: None,
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: None,
             upstream_task_id: None,
             upstream_backend_id: None,
@@ -335,6 +642,13 @@ mod tests {
     fn test_validate_structured_missing_upstream_backend_id() {
         let contract = DelegationContract {
             delegation_id: Some("del-001".into()),
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: Some("wr-001".into()),
             upstream_task_id: None,
             upstream_backend_id: None,
@@ -352,6 +666,13 @@ mod tests {
     fn test_validate_structured_missing_upstream_work_request_id() {
         let contract = DelegationContract {
             delegation_id: Some("del-001".into()),
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: None,
             upstream_task_id: Some("task-001".into()),
             upstream_backend_id: Some("backend-alpha".into()),
@@ -369,6 +690,13 @@ mod tests {
     fn test_validate_structured_empty_downstream_domain_kind() {
         let contract = DelegationContract {
             delegation_id: None,
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: None,
             upstream_task_id: None,
             upstream_backend_id: None,
@@ -389,6 +717,13 @@ mod tests {
         let cases: Vec<DelegationContract> = vec![
             DelegationContract {
                 delegation_id: Some("del-001".into()),
+                upstream_domain_id: None,
+                downstream_domain_id: None,
+                delivery_contract_id: None,
+                visibility_policy: None,
+                evidence_rollup_policy: None,
+                status_mapping_policy: None,
+                trace_context: None,
                 upstream_work_request_id: Some("wr-001".into()),
                 upstream_task_id: None,
                 upstream_backend_id: None,
@@ -397,6 +732,13 @@ mod tests {
             },
             DelegationContract {
                 delegation_id: Some("del-001".into()),
+                upstream_domain_id: None,
+                downstream_domain_id: None,
+                delivery_contract_id: None,
+                visibility_policy: None,
+                evidence_rollup_policy: None,
+                status_mapping_policy: None,
+                trace_context: None,
                 upstream_work_request_id: None,
                 upstream_task_id: Some("task-001".into()),
                 upstream_backend_id: Some("backend-alpha".into()),
@@ -405,6 +747,13 @@ mod tests {
             },
             DelegationContract {
                 delegation_id: None,
+                upstream_domain_id: None,
+                downstream_domain_id: None,
+                delivery_contract_id: None,
+                visibility_policy: None,
+                evidence_rollup_policy: None,
+                status_mapping_policy: None,
+                trace_context: None,
                 upstream_work_request_id: None,
                 upstream_task_id: None,
                 upstream_backend_id: None,
@@ -421,5 +770,76 @@ mod tests {
                 "Display must match validate() for {contract:?}"
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Policy field display tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_visibility_policy_display() {
+        assert_eq!(VisibilityPolicy::Private.to_string(), "private");
+        assert_eq!(VisibilityPolicy::Shared.to_string(), "shared");
+        assert_eq!(VisibilityPolicy::Public.to_string(), "public");
+    }
+
+    #[test]
+    fn test_evidence_rollup_policy_display() {
+        assert_eq!(EvidenceRollupPolicy::None.to_string(), "none");
+        assert_eq!(EvidenceRollupPolicy::Summary.to_string(), "summary");
+        assert_eq!(EvidenceRollupPolicy::Full.to_string(), "full");
+    }
+
+    #[test]
+    fn test_status_mapping_policy_display() {
+        assert_eq!(StatusMappingPolicy::Strict.to_string(), "strict");
+        assert_eq!(StatusMappingPolicy::Loose.to_string(), "loose");
+        assert_eq!(StatusMappingPolicy::Passthrough.to_string(), "passthrough");
+    }
+
+    #[test]
+    fn test_policy_serde_roundtrip() {
+        for vp in [VisibilityPolicy::Private, VisibilityPolicy::Shared, VisibilityPolicy::Public] {
+            let json = serde_json::to_string(&vp).unwrap();
+            let rt: VisibilityPolicy = serde_json::from_str(&json).unwrap();
+            assert_eq!(rt, vp);
+        }
+        for erp in [EvidenceRollupPolicy::None, EvidenceRollupPolicy::Summary, EvidenceRollupPolicy::Full] {
+            let json = serde_json::to_string(&erp).unwrap();
+            let rt: EvidenceRollupPolicy = serde_json::from_str(&json).unwrap();
+            assert_eq!(rt, erp);
+        }
+        for smp in [StatusMappingPolicy::Strict, StatusMappingPolicy::Loose, StatusMappingPolicy::Passthrough] {
+            let json = serde_json::to_string(&smp).unwrap();
+            let rt: StatusMappingPolicy = serde_json::from_str(&json).unwrap();
+            assert_eq!(rt, smp);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Coarse-grained boundary proof
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_local_subtask_details_not_required() {
+        // The delegation contract validates with only optional fields,
+        // without requiring any local subtask details from either the
+        // source or target domain.
+        let contract = DelegationContract {
+            delegation_id: None,
+            upstream_domain_id: Some("limenet".to_string()),
+            downstream_domain_id: Some("local-meta-agent".to_string()),
+            delivery_contract_id: Some("dc-001".to_string()),
+            visibility_policy: Some(VisibilityPolicy::Shared),
+            evidence_rollup_policy: Some(EvidenceRollupPolicy::Summary),
+            status_mapping_policy: Some(StatusMappingPolicy::Strict),
+            trace_context: None,
+            upstream_work_request_id: None,
+            upstream_task_id: None,
+            upstream_backend_id: None,
+            downstream_domain_kind: "meta-agent".to_string(),
+            downstream_graph_id: None,
+        };
+        assert!(contract.validate().is_ok());
     }
 }

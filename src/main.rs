@@ -344,7 +344,10 @@ mod tests {
     use axum::body::Body;
     use axum::http::Response;
     use http_body_util::BodyExt;
-    use limenet::contracts::{BackendKind, DeliveryStatus, OwnershipMode, ReviewSurface};
+    use limenet::contracts::{
+        BackendKind, DeliveryStatus, EvidenceRollupPolicy, OwnershipMode, ReviewSurface,
+        StatusMappingPolicy, VisibilityPolicy,
+    };
 
     /// Convert a `Response<Body>` into a JSON value for assertion convenience.
     async fn body_to_json(response: Response<Body>) -> serde_json::Value {
@@ -362,6 +365,13 @@ mod tests {
     async fn test_full_delegation_returns_accepted() {
         let contract = DelegationContract {
             delegation_id: Some("del-001".into()),
+            upstream_domain_id: Some("limenet".into()),
+            downstream_domain_id: Some("local-meta-agent".into()),
+            delivery_contract_id: Some("dc-001".into()),
+            visibility_policy: Some(VisibilityPolicy::Shared),
+            evidence_rollup_policy: Some(EvidenceRollupPolicy::Summary),
+            status_mapping_policy: Some(StatusMappingPolicy::Strict),
+            trace_context: None,
             upstream_work_request_id: Some("wr-001".into()),
             upstream_task_id: Some("task-001".into()),
             upstream_backend_id: Some("backend-alpha".into()),
@@ -379,6 +389,13 @@ mod tests {
     async fn test_minimal_delegation_returns_accepted() {
         let contract = DelegationContract {
             delegation_id: None,
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: None,
             upstream_task_id: None,
             upstream_backend_id: None,
@@ -393,6 +410,13 @@ mod tests {
     async fn test_delegation_with_only_downstream_graph_returns_accepted() {
         let contract = DelegationContract {
             delegation_id: None,
+            upstream_domain_id: None,
+            downstream_domain_id: Some("local-meta-agent".into()),
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: None,
             upstream_task_id: None,
             upstream_backend_id: None,
@@ -409,6 +433,13 @@ mod tests {
     async fn test_missing_upstream_backend_id_returns_bad_request() {
         let contract = DelegationContract {
             delegation_id: Some("del-002".into()),
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: Some("wr-001".into()),
             upstream_task_id: None,
             upstream_backend_id: None,
@@ -428,6 +459,13 @@ mod tests {
     async fn test_missing_upstream_work_request_id_returns_bad_request() {
         let contract = DelegationContract {
             delegation_id: Some("del-003".into()),
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: None,
             upstream_task_id: Some("task-001".into()),
             upstream_backend_id: Some("backend-alpha".into()),
@@ -447,6 +485,13 @@ mod tests {
     async fn test_empty_domain_kind_with_graph_id_returns_bad_request() {
         let contract = DelegationContract {
             delegation_id: None,
+            upstream_domain_id: None,
+            downstream_domain_id: None,
+            delivery_contract_id: None,
+            visibility_policy: None,
+            evidence_rollup_policy: None,
+            status_mapping_policy: None,
+            trace_context: None,
             upstream_work_request_id: None,
             upstream_task_id: None,
             upstream_backend_id: None,
