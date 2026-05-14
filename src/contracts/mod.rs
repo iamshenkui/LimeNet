@@ -6,7 +6,7 @@ mod review_surface;
 mod task;
 
 pub use delegation::{DelegationContract, DelegationError};
-pub use delivery::{DeliveryError, DeliveryPackage, DeliveryStatus, PackageType};
+pub use delivery::{DeliveryError, DeliveryPackage, DeliveryStatus, EvidenceRef, TraceContext};
 pub use evidence_rollup::EvidenceRollup;
 pub use ownership::{BackendKind, Ownership, OwnershipError, OwnershipMode};
 pub use review_surface::ReviewSurface;

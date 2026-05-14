@@ -152,20 +152,22 @@ pub fn delivery_package_ingest_logic(pkg: DeliveryPackage) -> impl IntoResponse 
         Ok(()) => {
             let response = serde_json::json!({
                 "status": "accepted",
-                "delivery_id": pkg.delivery_id,
-                "source_domain": pkg.source_domain,
-                "target_domain": pkg.target_domain,
-                "package_type": pkg.package_type,
-                "delegation_contract_id": pkg.delegation_contract_id,
-                "ownership_ref": pkg.ownership_ref,
-                "payload_summary": pkg.payload_summary,
-                "artifact_count": pkg.artifact_count,
+                "package_id": pkg.package_id,
+                "delivery_contract_id": pkg.delivery_contract_id,
+                "result_summary": pkg.result_summary,
+                "evidence_refs": pkg.evidence_refs,
+                "review_surface_refs": pkg.review_surface_refs,
+                "open_risks": pkg.open_risks,
+                "unresolved_items": pkg.unresolved_items,
+                "recommended_next_action": pkg.recommended_next_action,
+                "delivery_status": pkg.delivery_status,
+                "trace_context": pkg.trace_context,
             });
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
-        Err(msg) => (
+        Err(err) => (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": msg })),
+            Json(serde_json::json!(err)),
         )
             .into_response(),
     }
@@ -338,7 +340,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::Response;
     use http_body_util::BodyExt;
-    use limenet::contracts::{BackendKind, OwnershipMode, PackageType, ReviewSurface};
+    use limenet::contracts::{BackendKind, DeliveryStatus, OwnershipMode, ReviewSurface};
 
     /// Convert a `Response<Body>` into a JSON value for assertion convenience.
     async fn body_to_json(response: Response<Body>) -> serde_json::Value {
@@ -549,86 +551,94 @@ mod tests {
     #[tokio::test]
     async fn test_minimal_delivery_package_returns_accepted() {
         let pkg = DeliveryPackage {
-            delivery_id: None,
-            source_domain: None,
-            target_domain: None,
-            package_type: PackageType::Standard,
-            delegation_contract_id: Some("dc-001".to_string()),
-            ownership_ref: None,
-            payload_summary: None,
-            artifact_count: None,
+            package_id: Some("dp-001".to_string()),
+            delivery_contract_id: Some("dc-001".to_string()),
+            result_summary: None,
+            evidence_refs: None,
+            review_surface_refs: None,
+            open_risks: None,
+            unresolved_items: None,
+            recommended_next_action: None,
+            delivery_status: Some(DeliveryStatus::Proposed),
+            trace_context: None,
         };
         let response = delivery_package_ingest_logic(pkg).into_response();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         let body = body_to_json(response).await;
         assert_eq!(body["status"], "accepted");
-        assert_eq!(body["delivery_id"], serde_json::Value::Null);
+        assert_eq!(body["package_id"], "dp-001");
     }
 
     #[tokio::test]
     async fn test_full_delivery_package_returns_accepted_with_id() {
         let pkg = DeliveryPackage {
-            delivery_id: Some("del-001".into()),
-            source_domain: Some("task-graph".into()),
-            target_domain: Some("human-review".into()),
-            package_type: PackageType::Expedited,
-            delegation_contract_id: Some("dc-001".into()),
-            ownership_ref: Some("own-001".into()),
-            payload_summary: Some("Review batch for sprint-42".into()),
-            artifact_count: Some(3),
+            package_id: Some("dp-001".into()),
+            delivery_contract_id: Some("dc-001".into()),
+            result_summary: Some("All checks passed".into()),
+            evidence_refs: Some(vec![]),
+            review_surface_refs: Some(vec!["review/approved-001.md".into()]),
+            open_risks: Some(vec!["Edge-case risk".into()]),
+            unresolved_items: Some(vec![]),
+            recommended_next_action: Some("proceed".into()),
+            delivery_status: Some(DeliveryStatus::Accepted),
+            trace_context: None,
         };
         let response = delivery_package_ingest_logic(pkg).into_response();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         let body = body_to_json(response).await;
         assert_eq!(body["status"], "accepted");
-        assert_eq!(body["delivery_id"], "del-001");
+        assert_eq!(body["package_id"], "dp-001");
     }
 
     #[tokio::test]
-    async fn test_delivery_package_zero_artifact_count_returns_bad_request() {
+    async fn test_delivery_package_missing_contract_returns_bad_request() {
         let pkg = DeliveryPackage {
-            delivery_id: None,
-            source_domain: None,
-            target_domain: None,
-            package_type: PackageType::Batch,
-            delegation_contract_id: Some("dc-001".to_string()),
-            ownership_ref: None,
-            payload_summary: None,
-            artifact_count: Some(0),
+            package_id: Some("dp-001".to_string()),
+            delivery_contract_id: None,
+            result_summary: None,
+            evidence_refs: None,
+            review_surface_refs: None,
+            open_risks: None,
+            unresolved_items: None,
+            recommended_next_action: None,
+            delivery_status: None,
+            trace_context: None,
         };
         let response = delivery_package_ingest_logic(pkg).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
         assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
-        assert_eq!(body["reason"], "invalid_value", "reason: {:?}", body["reason"]);
-        assert_eq!(body["field"], "artifact_count", "field: {:?}", body["field"]);
+        assert_eq!(body["reason"], "missing_anchor", "reason: {:?}", body["reason"]);
+        assert_eq!(body["field"], "delivery_contract_id", "field: {:?}", body["field"]);
     }
 
     #[tokio::test]
     async fn test_delivery_package_no_local_subtask_details_required() {
-        // Only package_type and delegation contract anchor are required;
+        // Only package_id and delivery contract anchor are required;
         // no local subtask queue details from either the source or
         // target domain are needed.
-        for ptype in &[
-            PackageType::Standard,
-            PackageType::Expedited,
-            PackageType::Batch,
+        for status in &[
+            DeliveryStatus::Proposed,
+            DeliveryStatus::Accepted,
+            DeliveryStatus::NeedsRevision,
         ] {
             let pkg = DeliveryPackage {
-                delivery_id: None,
-                source_domain: None,
-                target_domain: None,
-                package_type: *ptype,
-                delegation_contract_id: Some("dc-001".to_string()),
-                ownership_ref: None,
-                payload_summary: None,
-                artifact_count: None,
+                package_id: Some("dp-001".to_string()),
+                delivery_contract_id: Some("dc-001".to_string()),
+                result_summary: None,
+                evidence_refs: None,
+                review_surface_refs: None,
+                open_risks: None,
+                unresolved_items: None,
+                recommended_next_action: None,
+                delivery_status: Some(*status),
+                trace_context: None,
             };
             let response = delivery_package_ingest_logic(pkg).into_response();
             assert_eq!(
                 response.status(),
                 StatusCode::ACCEPTED,
-                "expected ACCEPTED for package_type={ptype:?}",
+                "expected ACCEPTED for delivery_status={status:?}",
             );
         }
     }
@@ -966,14 +976,16 @@ mod tests {
             let json = serde_json::to_string(&record).expect("fixture must serialize");
             let rt: DeliveryPackage =
                 serde_json::from_str(&json).expect("fixture must deserialize");
-            assert_eq!(rt.delivery_id, record.delivery_id);
-            assert_eq!(rt.source_domain, record.source_domain);
-            assert_eq!(rt.target_domain, record.target_domain);
-            assert_eq!(rt.package_type, record.package_type);
-            assert_eq!(rt.delegation_contract_id, record.delegation_contract_id);
-            assert_eq!(rt.ownership_ref, record.ownership_ref);
-            assert_eq!(rt.payload_summary, record.payload_summary);
-            assert_eq!(rt.artifact_count, record.artifact_count);
+            assert_eq!(rt.package_id, record.package_id);
+            assert_eq!(rt.delivery_contract_id, record.delivery_contract_id);
+            assert_eq!(rt.result_summary, record.result_summary);
+            assert_eq!(rt.evidence_refs, record.evidence_refs);
+            assert_eq!(rt.review_surface_refs, record.review_surface_refs);
+            assert_eq!(rt.open_risks, record.open_risks);
+            assert_eq!(rt.unresolved_items, record.unresolved_items);
+            assert_eq!(rt.recommended_next_action, record.recommended_next_action);
+            assert_eq!(rt.delivery_status, record.delivery_status);
+            assert_eq!(rt.trace_context, record.trace_context);
         }
     }
 
@@ -1006,51 +1018,63 @@ mod tests {
             assert_eq!(body["status"], "accepted", "case {case_name}");
 
             assert_eq!(
-                body["delivery_id"],
-                serde_json::to_value(&record.delivery_id).unwrap(),
-                "delivery_id mismatch for {case_name}"
+                body["package_id"],
+                serde_json::to_value(&record.package_id).unwrap(),
+                "package_id mismatch for {case_name}"
             );
 
             assert_eq!(
-                body["source_domain"],
-                serde_json::to_value(&record.source_domain).unwrap(),
-                "source_domain mismatch for {case_name}"
+                body["delivery_contract_id"],
+                serde_json::to_value(&record.delivery_contract_id).unwrap(),
+                "delivery_contract_id mismatch for {case_name}"
             );
 
             assert_eq!(
-                body["target_domain"],
-                serde_json::to_value(&record.target_domain).unwrap(),
-                "target_domain mismatch for {case_name}"
+                body["result_summary"],
+                serde_json::to_value(&record.result_summary).unwrap(),
+                "result_summary mismatch for {case_name}"
             );
 
             assert_eq!(
-                body["package_type"],
-                serde_json::to_value(record.package_type).unwrap(),
-                "package_type mismatch for {case_name}"
+                body["evidence_refs"],
+                serde_json::to_value(&record.evidence_refs).unwrap(),
+                "evidence_refs mismatch for {case_name}"
             );
 
             assert_eq!(
-                body["delegation_contract_id"],
-                serde_json::to_value(&record.delegation_contract_id).unwrap(),
-                "delegation_contract_id mismatch for {case_name}"
+                body["review_surface_refs"],
+                serde_json::to_value(&record.review_surface_refs).unwrap(),
+                "review_surface_refs mismatch for {case_name}"
             );
 
             assert_eq!(
-                body["ownership_ref"],
-                serde_json::to_value(&record.ownership_ref).unwrap(),
-                "ownership_ref mismatch for {case_name}"
+                body["open_risks"],
+                serde_json::to_value(&record.open_risks).unwrap(),
+                "open_risks mismatch for {case_name}"
             );
 
             assert_eq!(
-                body["payload_summary"],
-                serde_json::to_value(&record.payload_summary).unwrap(),
-                "payload_summary mismatch for {case_name}"
+                body["unresolved_items"],
+                serde_json::to_value(&record.unresolved_items).unwrap(),
+                "unresolved_items mismatch for {case_name}"
             );
 
             assert_eq!(
-                body["artifact_count"],
-                serde_json::to_value(record.artifact_count).unwrap(),
-                "artifact_count mismatch for {case_name}"
+                body["recommended_next_action"],
+                serde_json::to_value(&record.recommended_next_action).unwrap(),
+                "recommended_next_action mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["delivery_status"],
+                serde_json::to_value(&record.delivery_status).unwrap(),
+                "delivery_status mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["trace_context"],
+                serde_json::to_value(&record.trace_context).unwrap(),
+                "trace_context mismatch for {case_name}"
             );
         }
     }

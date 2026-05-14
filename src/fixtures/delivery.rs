@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::contracts::{DeliveryPackage, EvidenceRollup, PackageType};
+use crate::contracts::{DeliveryPackage, DeliveryStatus, EvidenceRef, EvidenceRollup, TraceContext};
 
 /// Shared identifiers kept in sync with the meta-agent
 /// `delivery_fixture_baseline.py` so integration checks consume
@@ -18,91 +18,137 @@ const DELIVERY_CONTRACT_ID: &str = "dc-int2b-005-g-001";
 
 fn package_proposed() -> DeliveryPackage {
     DeliveryPackage {
-        delivery_id: Some("dp-int2b-005-001".into()),
-        source_domain: Some("task-graph".into()),
-        target_domain: Some("human-review".into()),
-        package_type: PackageType::Standard,
-        delegation_contract_id: Some(DELIVERY_CONTRACT_ID.into()),
-        ownership_ref: None,
-        payload_summary: Some(
+        package_id: Some("dp-int2b-005-001".into()),
+        delivery_contract_id: Some(DELIVERY_CONTRACT_ID.into()),
+        result_summary: Some(
             "All acceptance criteria satisfied with minor risks noted.".into(),
         ),
-        artifact_count: Some(1),
+        evidence_refs: Some(vec![EvidenceRef {
+            artifact: "run".into(),
+            path: "run.summary".into(),
+            value: "All acceptance criteria satisfied".into(),
+        }]),
+        review_surface_refs: Some(vec!["review/surface-001.md".into()]),
+        open_risks: Some(vec!["Minor edge-case risk in batch path".into()]),
+        unresolved_items: None,
+        recommended_next_action: Some("accept".into()),
+        delivery_status: Some(DeliveryStatus::Proposed),
+        trace_context: Some(TraceContext {
+            correlation_id: Some("corr-int2b-005-001".into()),
+            task_id: Some("INT2B-005-a".into()),
+            attempt_id: Some("attempt-001".into()),
+            last_event_id: None,
+        }),
     }
 }
 
 fn package_accepted() -> DeliveryPackage {
     DeliveryPackage {
-        delivery_id: Some("dp-int2b-005-002".into()),
-        source_domain: Some("task-graph".into()),
-        target_domain: Some("human-review".into()),
-        package_type: PackageType::Expedited,
-        delegation_contract_id: Some(DELIVERY_CONTRACT_ID.into()),
-        ownership_ref: Some("own-canonical-derived".into()),
-        payload_summary: Some(
+        package_id: Some("dp-int2b-005-002".into()),
+        delivery_contract_id: Some(DELIVERY_CONTRACT_ID.into()),
+        result_summary: Some(
             "Delivery accepted; all gates passed without blocking issues.".into(),
         ),
-        artifact_count: Some(2),
+        evidence_refs: Some(vec![EvidenceRef {
+            artifact: "run".into(),
+            path: "run.summary".into(),
+            value: "All gates passed".into(),
+        }]),
+        review_surface_refs: Some(vec!["review/approved-001.md".into()]),
+        open_risks: None,
+        unresolved_items: None,
+        recommended_next_action: Some("proceed".into()),
+        delivery_status: Some(DeliveryStatus::Accepted),
+        trace_context: Some(TraceContext {
+            correlation_id: Some("corr-int2b-005-002".into()),
+            task_id: Some("INT2B-005-b".into()),
+            attempt_id: None,
+            last_event_id: None,
+        }),
     }
 }
 
 fn package_needs_revision() -> DeliveryPackage {
     DeliveryPackage {
-        delivery_id: Some("dp-int2b-005-003".into()),
-        source_domain: Some("task-graph".into()),
-        target_domain: Some("human-review".into()),
-        package_type: PackageType::Standard,
-        delegation_contract_id: Some(DELIVERY_CONTRACT_ID.into()),
-        ownership_ref: Some("own-canonical-derived".into()),
-        payload_summary: Some(
+        package_id: Some("dp-int2b-005-003".into()),
+        delivery_contract_id: Some(DELIVERY_CONTRACT_ID.into()),
+        result_summary: Some(
             "Two acceptance criteria need revision before delivery can proceed.".into(),
         ),
-        artifact_count: Some(2),
+        evidence_refs: Some(vec![EvidenceRef {
+            artifact: "decision".into(),
+            path: "decision.summary".into(),
+            value: "Criteria AC-2, AC-5 require revision".into(),
+        }]),
+        review_surface_refs: Some(vec!["review/revision-001.md".into()]),
+        open_risks: Some(vec![]),
+        unresolved_items: Some(vec![
+            "AC-2: missing error handling for edge case".into(),
+            "AC-5: benchmark not yet satisfied".into(),
+        ]),
+        recommended_next_action: Some("revise-and-resubmit".into()),
+        delivery_status: Some(DeliveryStatus::NeedsRevision),
+        trace_context: Some(TraceContext {
+            correlation_id: Some("corr-int2b-005-003".into()),
+            task_id: Some("INT2B-005-c".into()),
+            attempt_id: Some("attempt-002".into()),
+            last_event_id: None,
+        }),
     }
 }
 
 fn package_rejected() -> DeliveryPackage {
     DeliveryPackage {
-        delivery_id: Some("dp-int2b-005-004".into()),
-        source_domain: Some("task-graph".into()),
-        target_domain: Some("human-review".into()),
-        package_type: PackageType::Batch,
-        delegation_contract_id: Some(DELIVERY_CONTRACT_ID.into()),
-        ownership_ref: Some("own-canonical-derived".into()),
-        payload_summary: Some(
+        package_id: Some("dp-int2b-005-004".into()),
+        delivery_contract_id: Some(DELIVERY_CONTRACT_ID.into()),
+        result_summary: Some(
             "Delivery rejected due to non-recoverable upstream contract drift.".into(),
         ),
-        artifact_count: Some(2),
+        evidence_refs: Some(vec![EvidenceRef {
+            artifact: "run".into(),
+            path: "run.summary".into(),
+            value: "Contract drift detected; cannot recover".into(),
+        }]),
+        review_surface_refs: Some(vec!["review/rejected-001.md".into()]),
+        open_risks: Some(vec!["Upstream contract may be stale".into()]),
+        unresolved_items: Some(vec![]),
+        recommended_next_action: Some("re-delegate".into()),
+        delivery_status: Some(DeliveryStatus::Rejected),
+        trace_context: None,
     }
 }
 
 fn package_superseded() -> DeliveryPackage {
     DeliveryPackage {
-        delivery_id: Some("dp-int2b-005-005".into()),
-        source_domain: Some("task-graph".into()),
-        target_domain: Some("human-review".into()),
-        package_type: PackageType::Standard,
-        delegation_contract_id: Some(DELIVERY_CONTRACT_ID.into()),
-        ownership_ref: None,
-        payload_summary: Some(
+        package_id: Some("dp-int2b-005-005".into()),
+        delivery_contract_id: Some(DELIVERY_CONTRACT_ID.into()),
+        result_summary: Some(
             "Delivery superseded by a newer package from the same contract.".into(),
         ),
-        artifact_count: Some(1),
+        evidence_refs: None,
+        review_surface_refs: None,
+        open_risks: None,
+        unresolved_items: None,
+        recommended_next_action: None,
+        delivery_status: Some(DeliveryStatus::Superseded),
+        trace_context: None,
     }
 }
 
 fn package_minimal() -> DeliveryPackage {
     DeliveryPackage {
-        delivery_id: Some("dp-int2b-005-006".into()),
-        source_domain: None,
-        target_domain: None,
-        package_type: PackageType::Standard,
-        delegation_contract_id: Some(DELIVERY_CONTRACT_ID.into()),
-        ownership_ref: None,
-        payload_summary: Some(
+        package_id: Some("dp-int2b-005-006".into()),
+        delivery_contract_id: Some(DELIVERY_CONTRACT_ID.into()),
+        result_summary: Some(
             "Minimal delivery with no auxiliary surface data.".into(),
         ),
-        artifact_count: None,
+        evidence_refs: None,
+        review_surface_refs: None,
+        open_risks: None,
+        unresolved_items: None,
+        recommended_next_action: None,
+        delivery_status: Some(DeliveryStatus::Proposed),
+        trace_context: None,
     }
 }
 
@@ -113,13 +159,26 @@ fn package_minimal() -> DeliveryPackage {
 fn rollup_standard() -> EvidenceRollup {
     EvidenceRollup {
         evidence_rollup_id: Some("er-int2b-005-001".into()),
+        task_id: Some("INT2B-005-a".into()),
         summary: Some(
             "Worker completed all acceptance criteria; no large payloads inlined.".into(),
         ),
+        evidence_refs: Some(vec![EvidenceRef {
+            artifact: "run".into(),
+            path: "run.summary".into(),
+            value: "All acceptance criteria satisfied".into(),
+        }]),
         artifact_refs: Some(vec![
             "artifacts/attempt-001/runner.log".into(),
             "artifacts/attempt-001/diff.patch".into(),
         ]),
+        conclusion: Some("proceed".into()),
+        trace_context: Some(TraceContext {
+            correlation_id: Some("corr-int2b-005-001".into()),
+            task_id: Some("INT2B-005-a".into()),
+            attempt_id: Some("attempt-001".into()),
+            last_event_id: None,
+        }),
         source_domain: Some("task-graph".into()),
         evidence_count: Some(2),
         delivery_id: Some("dp-int2b-005-001".into()),
@@ -129,10 +188,14 @@ fn rollup_standard() -> EvidenceRollup {
 fn rollup_summary_only() -> EvidenceRollup {
     EvidenceRollup {
         evidence_rollup_id: Some("er-int2b-005-002".into()),
+        task_id: None,
         summary: Some(
             "Minimal summary with no artifacts or evidence refs.".into(),
         ),
+        evidence_refs: None,
         artifact_refs: Some(vec![]),
+        conclusion: None,
+        trace_context: None,
         source_domain: Some("task-graph".into()),
         evidence_count: None,
         delivery_id: Some("dp-int2b-005-006".into()),
@@ -142,10 +205,23 @@ fn rollup_summary_only() -> EvidenceRollup {
 fn rollup_artifact_heavy() -> EvidenceRollup {
     EvidenceRollup {
         evidence_rollup_id: Some("er-int2b-005-003".into()),
+        task_id: Some("INT2B-005-b".into()),
         summary: Some(
             "Worker produced extensive artifacts; all large outputs referenced indirectly."
                 .into(),
         ),
+        evidence_refs: Some(vec![
+            EvidenceRef {
+                artifact: "run".into(),
+                path: "run.summary".into(),
+                value: "All gates passed".into(),
+            },
+            EvidenceRef {
+                artifact: "decision".into(),
+                path: "decision.summary".into(),
+                value: "Proceed with delivery".into(),
+            },
+        ]),
         artifact_refs: Some(vec![
             "artifacts/attempt-001/runner.log".into(),
             "artifacts/attempt-001/diff.patch".into(),
@@ -153,6 +229,13 @@ fn rollup_artifact_heavy() -> EvidenceRollup {
             "artifacts/attempt-001/stdout.txt".into(),
             "artifacts/attempt-001/stderr.txt".into(),
         ]),
+        conclusion: Some("proceed".into()),
+        trace_context: Some(TraceContext {
+            correlation_id: Some("corr-int2b-005-002".into()),
+            task_id: Some("INT2B-005-b".into()),
+            attempt_id: None,
+            last_event_id: None,
+        }),
         source_domain: Some("task-graph".into()),
         evidence_count: Some(5),
         delivery_id: Some("dp-int2b-005-002".into()),
@@ -169,14 +252,14 @@ fn rollup_artifact_heavy() -> EvidenceRollup {
 /// The six DeliveryPackage cases mirror the meta-agent
 /// `delivery_fixture_baseline.py`:
 ///
-/// | Case name          | delivery_id            | package_type | artifact_count |
-/// |--------------------|------------------------|--------------|----------------|
-/// | `proposed`         | dp-int2b-005-001       | Standard     | 1              |
-/// | `accepted`         | dp-int2b-005-002       | Expedited    | 2              |
-/// | `needs-revision`   | dp-int2b-005-003       | Standard     | 2              |
-/// | `rejected`         | dp-int2b-005-004       | Batch        | 2              |
-/// | `superseded`       | dp-int2b-005-005       | Standard     | 1              |
-/// | `minimal`          | dp-int2b-005-006       | Standard     | —              |
+/// | Case name          | package_id             | delivery_status  |
+/// |--------------------|------------------------|------------------|
+/// | `proposed`         | dp-int2b-005-001       | Proposed         |
+/// | `accepted`         | dp-int2b-005-002       | Accepted         |
+/// | `needs-revision`   | dp-int2b-005-003       | NeedsRevision    |
+/// | `rejected`         | dp-int2b-005-004       | Rejected         |
+/// | `superseded`       | dp-int2b-005-005       | Superseded       |
+/// | `minimal`          | dp-int2b-005-006       | Proposed         |
 ///
 /// The three EvidenceRollup cases mirror the density axes:
 ///
@@ -293,10 +376,10 @@ mod tests {
     fn test_all_packages_share_contract_id() {
         for package in DeliveryFixtures::all_baseline_packages() {
             assert_eq!(
-                package.delegation_contract_id.as_deref(),
+                package.delivery_contract_id.as_deref(),
                 Some(DELIVERY_CONTRACT_ID),
                 "package {:?} must use shared contract anchor",
-                package.delivery_id,
+                package.package_id,
             );
         }
     }
@@ -308,66 +391,55 @@ mod tests {
     #[test]
     fn test_package_proposed() {
         let p = package_proposed();
-        assert_eq!(p.delivery_id.as_deref(), Some("dp-int2b-005-001"));
-        assert_eq!(p.package_type, PackageType::Standard);
-        assert_eq!(
-            p.delegation_contract_id.as_deref(),
-            Some(DELIVERY_CONTRACT_ID)
-        );
-        assert_eq!(p.artifact_count, Some(1));
-        assert!(p.ownership_ref.is_none());
+        assert_eq!(p.package_id.as_deref(), Some("dp-int2b-005-001"));
+        assert_eq!(p.delivery_status, Some(DeliveryStatus::Proposed));
+        assert_eq!(p.delivery_contract_id.as_deref(), Some(DELIVERY_CONTRACT_ID));
+        assert!(p.evidence_refs.as_ref().is_some_and(|r| !r.is_empty()));
+        assert!(p.review_surface_refs.as_ref().is_some_and(|r| !r.is_empty()));
         assert!(p.validate().is_ok());
     }
 
     #[test]
     fn test_package_accepted() {
         let p = package_accepted();
-        assert_eq!(p.delivery_id.as_deref(), Some("dp-int2b-005-002"));
-        assert_eq!(p.package_type, PackageType::Expedited);
-        assert_eq!(p.artifact_count, Some(2));
-        assert!(p.ownership_ref.is_some());
+        assert_eq!(p.package_id.as_deref(), Some("dp-int2b-005-002"));
+        assert_eq!(p.delivery_status, Some(DeliveryStatus::Accepted));
         assert!(p.validate().is_ok());
     }
 
     #[test]
     fn test_package_needs_revision() {
         let p = package_needs_revision();
-        assert_eq!(p.delivery_id.as_deref(), Some("dp-int2b-005-003"));
-        assert_eq!(p.package_type, PackageType::Standard);
-        assert_eq!(p.artifact_count, Some(2));
-        assert!(p.payload_summary.as_deref().unwrap().contains("revision"));
+        assert_eq!(p.package_id.as_deref(), Some("dp-int2b-005-003"));
+        assert_eq!(p.delivery_status, Some(DeliveryStatus::NeedsRevision));
+        assert!(p.result_summary.as_deref().unwrap().contains("revision"));
         assert!(p.validate().is_ok());
     }
 
     #[test]
     fn test_package_rejected() {
         let p = package_rejected();
-        assert_eq!(p.delivery_id.as_deref(), Some("dp-int2b-005-004"));
-        assert_eq!(p.package_type, PackageType::Batch);
-        assert_eq!(p.artifact_count, Some(2));
-        assert!(p.payload_summary.as_deref().unwrap().contains("rejected"));
+        assert_eq!(p.package_id.as_deref(), Some("dp-int2b-005-004"));
+        assert_eq!(p.delivery_status, Some(DeliveryStatus::Rejected));
+        assert!(p.result_summary.as_deref().unwrap().contains("rejected"));
         assert!(p.validate().is_ok());
     }
 
     #[test]
     fn test_package_superseded() {
         let p = package_superseded();
-        assert_eq!(p.delivery_id.as_deref(), Some("dp-int2b-005-005"));
-        assert_eq!(p.package_type, PackageType::Standard);
-        assert_eq!(p.artifact_count, Some(1));
-        assert!(p.ownership_ref.is_none());
+        assert_eq!(p.package_id.as_deref(), Some("dp-int2b-005-005"));
+        assert_eq!(p.delivery_status, Some(DeliveryStatus::Superseded));
         assert!(p.validate().is_ok());
     }
 
     #[test]
     fn test_package_minimal() {
         let p = package_minimal();
-        assert_eq!(p.delivery_id.as_deref(), Some("dp-int2b-005-006"));
-        assert_eq!(p.package_type, PackageType::Standard);
-        assert!(p.source_domain.is_none());
-        assert!(p.target_domain.is_none());
-        assert!(p.ownership_ref.is_none());
-        assert!(p.artifact_count.is_none());
+        assert_eq!(p.package_id.as_deref(), Some("dp-int2b-005-006"));
+        assert_eq!(p.delivery_status, Some(DeliveryStatus::Proposed));
+        assert!(p.evidence_refs.is_none());
+        assert!(p.review_surface_refs.is_none());
         assert!(p.validate().is_ok());
     }
 
@@ -415,7 +487,7 @@ mod tests {
     fn test_rollup_delivery_ids_reference_known_packages() {
         let package_ids: Vec<Option<String>> = DeliveryFixtures::all_baseline_packages()
             .into_iter()
-            .map(|p| p.delivery_id)
+            .map(|p| p.package_id)
             .collect();
 
         for rollup in DeliveryFixtures::all_baseline_rollups() {

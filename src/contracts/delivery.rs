@@ -7,13 +7,14 @@ use serde::{Deserialize, Serialize};
 ///
 /// Each error carries a stable `error` discriminator (`"validation_failed"`),
 /// a `reason` classifying the failure (`unsupported_status`, `missing_anchor`,
-/// `invalid_value`), the `field` and `value` involved, and the `anchor`
+/// `invalid_value`, `missing_field`), the `field` and `value` involved, and the `anchor`
 /// context identifying which reference caused the failure.
 #[derive(Debug, Clone, Serialize)]
 pub struct DeliveryError {
     /// Stable error discriminator — always `"validation_failed"`.
     pub error: String,
-    /// Structured reason: `"unsupported_status"`, `"missing_anchor"`, or `"invalid_value"`.
+    /// Structured reason: `"unsupported_status"`, `"missing_anchor"`,
+    /// `"invalid_value"`, or `"missing_field"`.
     pub reason: String,
     /// The field that caused the validation failure.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -21,7 +22,7 @@ pub struct DeliveryError {
     /// The invalid or unsupported value.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
-    /// The anchor context: `"delegation"` or `"ownership"`.
+    /// The anchor context: `"delegation"`, `"ownership"`, etc.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor: Option<String>,
 }
@@ -56,6 +57,16 @@ impl DeliveryError {
             anchor: None,
         }
     }
+
+    fn missing_field(field: &str, anchor: &str) -> Self {
+        Self {
+            error: "validation_failed".into(),
+            reason: "missing_field".into(),
+            field: Some(field.into()),
+            value: None,
+            anchor: Some(anchor.into()),
+        }
+    }
 }
 
 impl fmt::Display for DeliveryError {
@@ -72,7 +83,12 @@ impl fmt::Display for DeliveryError {
             }
             "invalid_value" => {
                 let field = self.field.as_deref().unwrap_or("field");
-                write!(f, "{field} must be at least 1 when set")
+                write!(f, "{field} must be non-empty when set")
+            }
+            "missing_field" => {
+                let field = self.field.as_deref().unwrap_or("field");
+                let anchor = self.anchor.as_deref().unwrap_or("unknown");
+                write!(f, "{field} is required ({anchor})")
             }
             _ => write!(f, "delivery validation failed"),
         }
@@ -204,56 +220,102 @@ impl TryFrom<&str> for DeliveryStatus {
     }
 }
 
-/// Supported package types for a delivery in the LimeNet system.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PackageType {
-    /// Standard delivery of review artifacts
-    Standard,
-    /// Expedited delivery for time-sensitive reviews
-    Expedited,
-    /// Batch delivery aggregating multiple review artifacts
-    Batch,
+/// A reference to a piece of evidence in the run artifacts.
+///
+/// Matches the shared Phase 2B wire shape emitted by the meta-agent
+/// Python `EvidenceRef` dataclass.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EvidenceRef {
+    /// The artifact category (e.g. "run", "decision", "progress")
+    #[serde(default)]
+    pub artifact: String,
+
+    /// Dotted path within the artifact (e.g. "run.summary")
+    #[serde(default)]
+    pub path: String,
+
+    /// The actual evidence value
+    #[serde(default)]
+    pub value: String,
+}
+
+/// In-process trace context for causation chains.
+///
+/// Matches the shared Phase 2B wire shape emitted by the meta-agent
+/// Python `TraceContext` dataclass. All fields are optional for
+/// deserialization flexibility; the wire format omits empty fields.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TraceContext {
+    /// Links events across a single run / session
+    #[serde(default)]
+    pub correlation_id: Option<String>,
+
+    /// Canonical task identifier (empty for graph-level operations)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+
+    /// Identifies one worker / review attempt within a task
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+
+    /// In-process cursor — the event_id of the most recent event
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event_id: Option<String>,
 }
 
 /// Coarse-grained delivery package for cross-domain review surfaces.
 ///
-/// Wraps the delivery identity, origin/target domains, and indirect
-/// references to the delegation contract and ownership record.
-/// Review surfaces remain indirect and do not require local subtask
-/// details from either the source or target domain.
+/// Wraps the delivery identity, result summary, evidence references,
+/// review surface anchors, risks, unresolved items, and the delegation
+/// contract anchor. Review surfaces remain indirect and do not require
+/// local subtask details from either the source or target domain.
+///
+/// Matches the shared Phase 2B wire shape emitted by the meta-agent
+/// Python `DeliveryPackage` dataclass.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeliveryPackage {
-    /// Unique identifier for this delivery package
+    /// Stable identifier for this delivery package
     #[serde(default)]
-    pub delivery_id: Option<String>,
+    pub package_id: Option<String>,
 
-    /// Domain or system that originated this delivery
+    /// Links the package to the DelegationContract that governed
+    /// the cross-domain boundary
     #[serde(default)]
-    pub source_domain: Option<String>,
+    pub delivery_contract_id: Option<String>,
 
-    /// Domain or system that is the target of this delivery
+    /// Human-readable summary of the upstream result
     #[serde(default)]
-    pub target_domain: Option<String>,
+    pub result_summary: Option<String>,
 
-    /// Type of delivery package (standard, expedited, or batch)
-    pub package_type: PackageType,
-
-    /// Reference to the delegation contract governing this delivery
+    /// References to evidence supporting the result
     #[serde(default)]
-    pub delegation_contract_id: Option<String>,
+    pub evidence_refs: Option<Vec<EvidenceRef>>,
 
-    /// Reference to the ownership record for the delivered artifacts
+    /// Coarse-grained references to review surfaces (artifact paths,
+    /// report URIs) — no inline content, no per-subtask detail
     #[serde(default)]
-    pub ownership_ref: Option<String>,
+    pub review_surface_refs: Option<Vec<String>>,
 
-    /// Coarse-grained summary of the payload being delivered
+    /// Risks identified during upstream work that are still open
+    /// at delivery time
     #[serde(default)]
-    pub payload_summary: Option<String>,
+    pub open_risks: Option<Vec<String>>,
 
-    /// Number of artifacts included in this delivery package
+    /// Items left unresolved by upstream work
     #[serde(default)]
-    pub artifact_count: Option<u32>,
+    pub unresolved_items: Option<Vec<String>>,
+
+    /// Suggested next step for the downstream domain
+    #[serde(default)]
+    pub recommended_next_action: Option<String>,
+
+    /// Lifecycle status of the delivery
+    #[serde(default)]
+    pub delivery_status: Option<DeliveryStatus>,
+
+    /// In-process trace context for causation tracking
+    #[serde(default)]
+    pub trace_context: Option<TraceContext>,
 }
 
 impl DeliveryPackage {
@@ -272,19 +334,48 @@ impl DeliveryPackage {
     /// The structured error distinguishes unsupported status values from
     /// missing anchors, and surfaces the field and anchor context involved.
     pub fn validate_structured(&self) -> Result<(), DeliveryError> {
-        // The delegation contract anchor is required — every delivery
+        // The delivery contract anchor is required — every delivery
         // package must trace back to an authorizing delegation contract.
-        if self.delegation_contract_id.is_none() {
+        if self.delivery_contract_id.as_ref().is_none_or(|s| s.is_empty()) {
             return Err(DeliveryError::missing_anchor(
-                "delegation_contract_id",
+                "delivery_contract_id",
                 "delegation",
             ));
         }
 
-        // A delivery package with artifact_count=0 is semantically
-        // meaningless — the count describes packaged artifacts in transit
-        if let Some(0) = self.artifact_count {
-            return Err(DeliveryError::invalid_value("artifact_count"));
+        // package_id is required — every delivery package must have a
+        // stable identity.
+        if self.package_id.as_ref().is_none_or(|s| s.is_empty()) {
+            return Err(DeliveryError::missing_field(
+                "package_id",
+                "identity",
+            ));
+        }
+
+        // result_summary must be non-empty when set
+        if let Some(ref s) = self.result_summary {
+            if s.trim().is_empty() {
+                return Err(DeliveryError::invalid_value("result_summary"));
+            }
+        }
+
+        // recommended_next_action must be non-empty when set
+        if let Some(ref s) = self.recommended_next_action {
+            if s.trim().is_empty() {
+                return Err(DeliveryError::invalid_value("recommended_next_action"));
+            }
+        }
+
+        // review_surface_refs must be present when evidence_refs are
+        // populated — review-surface anchors are required for each
+        // evidence point
+        if self.evidence_refs.as_ref().is_some_and(|refs| !refs.is_empty()) {
+            if self.review_surface_refs.as_ref().is_none_or(|refs| refs.is_empty()) {
+                return Err(DeliveryError::missing_field(
+                    "review_surface_refs",
+                    "review_surface",
+                ));
+            }
         }
 
         Ok(())
@@ -296,104 +387,148 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_deserialize_standard() {
-        let json = r#"{"package_type":"standard"}"#;
+    fn test_deserialize_minimal() {
+        let json = r#"{}"#;
         let pkg: DeliveryPackage = serde_json::from_str(json).unwrap();
-        assert_eq!(pkg.package_type, PackageType::Standard);
-        assert!(pkg.delivery_id.is_none());
-        assert!(pkg.source_domain.is_none());
-        assert!(pkg.target_domain.is_none());
-        assert!(pkg.delegation_contract_id.is_none());
-        assert!(pkg.ownership_ref.is_none());
-        assert!(pkg.payload_summary.is_none());
-        assert!(pkg.artifact_count.is_none());
-    }
-
-    #[test]
-    fn test_deserialize_expedited() {
-        let json = r#"{"package_type":"expedited"}"#;
-        let pkg: DeliveryPackage = serde_json::from_str(json).unwrap();
-        assert_eq!(pkg.package_type, PackageType::Expedited);
-    }
-
-    #[test]
-    fn test_deserialize_batch() {
-        let json = r#"{"package_type":"batch"}"#;
-        let pkg: DeliveryPackage = serde_json::from_str(json).unwrap();
-        assert_eq!(pkg.package_type, PackageType::Batch);
+        assert!(pkg.package_id.is_none());
+        assert!(pkg.delivery_contract_id.is_none());
+        assert!(pkg.result_summary.is_none());
+        assert!(pkg.evidence_refs.is_none());
+        assert!(pkg.review_surface_refs.is_none());
+        assert!(pkg.open_risks.is_none());
+        assert!(pkg.unresolved_items.is_none());
+        assert!(pkg.recommended_next_action.is_none());
+        assert!(pkg.delivery_status.is_none());
+        assert!(pkg.trace_context.is_none());
     }
 
     #[test]
     fn test_deserialize_partial() {
         let json = r#"{
-            "delivery_id":"del-001",
-            "package_type":"standard",
-            "source_domain":"task-graph",
-            "target_domain":"human-review"
+            "package_id":"dp-001",
+            "delivery_contract_id":"dc-001",
+            "result_summary":"All checks passed"
         }"#;
         let pkg: DeliveryPackage = serde_json::from_str(json).unwrap();
-        assert_eq!(pkg.delivery_id, Some("del-001".to_string()));
-        assert_eq!(pkg.package_type, PackageType::Standard);
-        assert_eq!(pkg.source_domain, Some("task-graph".to_string()));
-        assert_eq!(pkg.target_domain, Some("human-review".to_string()));
-        assert!(pkg.delegation_contract_id.is_none());
-        assert!(pkg.ownership_ref.is_none());
-        assert!(pkg.payload_summary.is_none());
-        assert!(pkg.artifact_count.is_none());
+        assert_eq!(pkg.package_id, Some("dp-001".to_string()));
+        assert_eq!(pkg.delivery_contract_id, Some("dc-001".to_string()));
+        assert_eq!(pkg.result_summary, Some("All checks passed".to_string()));
+        assert!(pkg.evidence_refs.is_none());
+        assert!(pkg.review_surface_refs.is_none());
+        assert!(pkg.delivery_status.is_none());
+        assert!(pkg.trace_context.is_none());
+    }
+
+    #[test]
+    fn test_deserialize_with_evidence_refs() {
+        let json = r#"{
+            "package_id":"dp-001",
+            "delivery_contract_id":"dc-001",
+            "result_summary":"All checks passed",
+            "evidence_refs":[
+                {"artifact":"run","path":"run.summary","value":"All acceptance criteria satisfied"}
+            ],
+            "review_surface_refs":["review/surface-001.md"],
+            "delivery_status":"proposed"
+        }"#;
+        let pkg: DeliveryPackage = serde_json::from_str(json).unwrap();
+        assert_eq!(pkg.package_id, Some("dp-001".to_string()));
+        let refs = pkg.evidence_refs.unwrap();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].artifact, "run");
+        assert_eq!(refs[0].path, "run.summary");
+        assert_eq!(refs[0].value, "All acceptance criteria satisfied");
+        assert_eq!(pkg.review_surface_refs.unwrap().len(), 1);
+        assert_eq!(pkg.delivery_status, Some(DeliveryStatus::Proposed));
+    }
+
+    #[test]
+    fn test_deserialize_with_trace_context() {
+        let json = r#"{
+            "package_id":"dp-001",
+            "delivery_contract_id":"dc-001",
+            "result_summary":"Done",
+            "recommended_next_action":"proceed",
+            "delivery_status":"accepted",
+            "trace_context":{
+                "correlation_id":"corr-001",
+                "task_id":"T-001",
+                "attempt_id":"att-001"
+            }
+        }"#;
+        let pkg: DeliveryPackage = serde_json::from_str(json).unwrap();
+        let tc = pkg.trace_context.unwrap();
+        assert_eq!(tc.correlation_id, Some("corr-001".to_string()));
+        assert_eq!(tc.task_id, Some("T-001".to_string()));
+        assert_eq!(tc.attempt_id, Some("att-001".to_string()));
+        assert_eq!(tc.last_event_id, None);
+    }
+
+    #[test]
+    fn test_deserialize_status_variants() {
+        for (json_str, expected) in &[
+            (r#"{"delivery_status":"proposed"}"#, DeliveryStatus::Proposed),
+            (r#"{"delivery_status":"accepted"}"#, DeliveryStatus::Accepted),
+            (r#"{"delivery_status":"needs_revision"}"#, DeliveryStatus::NeedsRevision),
+            (r#"{"delivery_status":"rejected"}"#, DeliveryStatus::Rejected),
+            (r#"{"delivery_status":"superseded"}"#, DeliveryStatus::Superseded),
+        ] {
+            let pkg: DeliveryPackage = serde_json::from_str(json_str).unwrap();
+            assert_eq!(pkg.delivery_status, Some(*expected));
+        }
     }
 
     #[test]
     fn test_serde_roundtrip() {
         let pkg = DeliveryPackage {
-            delivery_id: Some("del-001".to_string()),
-            source_domain: Some("task-graph".to_string()),
-            target_domain: Some("human-review".to_string()),
-            package_type: PackageType::Batch,
-            delegation_contract_id: Some("dc-001".to_string()),
-            ownership_ref: Some("own-001".to_string()),
-            payload_summary: Some("Review batch for sprint-42".to_string()),
-            artifact_count: Some(3),
+            package_id: Some("dp-001".to_string()),
+            delivery_contract_id: Some("dc-001".to_string()),
+            result_summary: Some("All checks passed".to_string()),
+            evidence_refs: Some(vec![EvidenceRef {
+                artifact: "run".to_string(),
+                path: "run.summary".to_string(),
+                value: "All criteria met".to_string(),
+            }]),
+            review_surface_refs: Some(vec!["review/surface-001.md".to_string()]),
+            open_risks: Some(vec!["Edge-case risk".to_string()]),
+            unresolved_items: Some(vec!["Pending benchmark".to_string()]),
+            recommended_next_action: Some("proceed".to_string()),
+            delivery_status: Some(DeliveryStatus::Proposed),
+            trace_context: Some(TraceContext {
+                correlation_id: Some("corr-001".to_string()),
+                task_id: Some("T-001".to_string()),
+                attempt_id: None,
+                last_event_id: None,
+            }),
         };
         let json = serde_json::to_string(&pkg).unwrap();
         let deserialized: DeliveryPackage = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.delivery_id, Some("del-001".to_string()));
-        assert_eq!(deserialized.source_domain, Some("task-graph".to_string()));
-        assert_eq!(deserialized.target_domain, Some("human-review".to_string()));
-        assert_eq!(deserialized.package_type, PackageType::Batch);
-        assert_eq!(
-            deserialized.delegation_contract_id,
-            Some("dc-001".to_string())
-        );
-        assert_eq!(deserialized.ownership_ref, Some("own-001".to_string()));
-        assert_eq!(
-            deserialized.payload_summary,
-            Some("Review batch for sprint-42".to_string())
-        );
-        assert_eq!(deserialized.artifact_count, Some(3));
+        assert_eq!(deserialized.package_id, Some("dp-001".to_string()));
+        assert_eq!(deserialized.delivery_contract_id, Some("dc-001".to_string()));
+        assert_eq!(deserialized.result_summary, Some("All checks passed".to_string()));
+        assert_eq!(deserialized.delivery_status, Some(DeliveryStatus::Proposed));
+        let refs = deserialized.evidence_refs.unwrap();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].artifact, "run");
+        assert_eq!(deserialized.review_surface_refs.unwrap().len(), 1);
+        assert_eq!(deserialized.open_risks.unwrap().len(), 1);
+        assert_eq!(deserialized.unresolved_items.unwrap().len(), 1);
+        assert_eq!(deserialized.recommended_next_action, Some("proceed".to_string()));
+        let tc = deserialized.trace_context.unwrap();
+        assert_eq!(tc.correlation_id, Some("corr-001".to_string()));
+        assert_eq!(tc.task_id, Some("T-001".to_string()));
+        assert!(tc.attempt_id.is_none());
+        assert!(tc.last_event_id.is_none());
     }
 
     #[test]
-    fn test_serde_rejects_unknown_package_type() {
+    fn test_serde_rejects_unknown_delivery_status() {
         let result: Result<DeliveryPackage, _> =
-            serde_json::from_str(r#"{"package_type":"unknown"}"#);
+            serde_json::from_str(r#"{"delivery_status":"unknown"}"#);
         assert!(
             result.is_err(),
-            "expected deserialization error for unknown package_type"
+            "expected deserialization error for unknown delivery_status"
         );
-    }
-
-    #[test]
-    fn test_missing_optional_fields_in_partial_json() {
-        let pkg: DeliveryPackage =
-            serde_json::from_str(r#"{"package_type":"expedited","source_domain":"mesh"}"#).unwrap();
-        assert_eq!(pkg.package_type, PackageType::Expedited);
-        assert_eq!(pkg.source_domain, Some("mesh".to_string()));
-        assert!(pkg.target_domain.is_none());
-        assert!(pkg.delivery_id.is_none());
-        assert!(pkg.delegation_contract_id.is_none());
-        assert!(pkg.ownership_ref.is_none());
-        assert!(pkg.payload_summary.is_none());
-        assert!(pkg.artifact_count.is_none());
     }
 
     // ------------------------------------------------------------------
@@ -401,49 +536,165 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn test_minimal_package_is_valid() {
+    fn test_minimal_package_fails_validation_missing_contract() {
         let pkg = DeliveryPackage {
-            delivery_id: None,
-            source_domain: None,
-            target_domain: None,
-            package_type: PackageType::Standard,
-            delegation_contract_id: Some("dc-001".to_string()),
-            ownership_ref: None,
-            payload_summary: None,
-            artifact_count: None,
+            package_id: Some("dp-001".into()),
+            delivery_contract_id: None,
+            result_summary: None,
+            evidence_refs: None,
+            review_surface_refs: None,
+            open_risks: None,
+            unresolved_items: None,
+            recommended_next_action: None,
+            delivery_status: Some(DeliveryStatus::Proposed),
+            trace_context: None,
         };
-        assert!(pkg.validate().is_ok());
+        let err = pkg.validate().unwrap_err();
+        assert!(err.contains("delivery_contract_id"), "error: {err}");
+    }
+
+    #[test]
+    fn test_minimal_package_fails_validation_missing_package_id() {
+        let pkg = DeliveryPackage {
+            package_id: None,
+            delivery_contract_id: Some("dc-001".into()),
+            result_summary: None,
+            evidence_refs: None,
+            review_surface_refs: None,
+            open_risks: None,
+            unresolved_items: None,
+            recommended_next_action: None,
+            delivery_status: Some(DeliveryStatus::Proposed),
+            trace_context: None,
+        };
+        let err = pkg.validate().unwrap_err();
+        assert!(err.contains("package_id"), "error: {err}");
     }
 
     #[test]
     fn test_fully_populated_package_is_valid() {
         let pkg = DeliveryPackage {
-            delivery_id: Some("del-001".to_string()),
-            source_domain: Some("task-graph".to_string()),
-            target_domain: Some("human-review".to_string()),
-            package_type: PackageType::Expedited,
-            delegation_contract_id: Some("dc-001".to_string()),
-            ownership_ref: Some("own-001".to_string()),
-            payload_summary: Some("Review batch for sprint-42".to_string()),
-            artifact_count: Some(3),
+            package_id: Some("dp-001".into()),
+            delivery_contract_id: Some("dc-001".into()),
+            result_summary: Some("All gates passed".into()),
+            evidence_refs: Some(vec![EvidenceRef {
+                artifact: "run".into(),
+                path: "run.summary".into(),
+                value: "All checks passed".into(),
+            }]),
+            review_surface_refs: Some(vec!["review/approved-001.md".into()]),
+            open_risks: Some(vec![]),
+            unresolved_items: Some(vec![]),
+            recommended_next_action: Some("proceed".into()),
+            delivery_status: Some(DeliveryStatus::Accepted),
+            trace_context: Some(TraceContext {
+                correlation_id: Some("corr-001".into()),
+                task_id: Some("T-001".into()),
+                attempt_id: None,
+                last_event_id: None,
+            }),
         };
         assert!(pkg.validate().is_ok());
     }
 
     #[test]
-    fn test_artifact_count_zero_is_invalid() {
+    fn test_empty_result_summary_is_invalid() {
         let pkg = DeliveryPackage {
-            delivery_id: None,
-            source_domain: None,
-            target_domain: None,
-            package_type: PackageType::Batch,
-            delegation_contract_id: Some("dc-001".to_string()),
-            ownership_ref: None,
-            payload_summary: None,
-            artifact_count: Some(0),
+            package_id: Some("dp-001".into()),
+            delivery_contract_id: Some("dc-001".into()),
+            result_summary: Some("   ".into()),
+            evidence_refs: None,
+            review_surface_refs: None,
+            open_risks: None,
+            unresolved_items: None,
+            recommended_next_action: None,
+            delivery_status: None,
+            trace_context: None,
         };
         let err = pkg.validate().unwrap_err();
-        assert!(err.contains("artifact_count"), "error: {err}");
+        assert!(err.contains("result_summary"), "error: {err}");
+    }
+
+    #[test]
+    fn test_empty_recommended_next_action_is_invalid() {
+        let pkg = DeliveryPackage {
+            package_id: Some("dp-001".into()),
+            delivery_contract_id: Some("dc-001".into()),
+            result_summary: None,
+            evidence_refs: None,
+            review_surface_refs: None,
+            open_risks: None,
+            unresolved_items: None,
+            recommended_next_action: Some("".into()),
+            delivery_status: None,
+            trace_context: None,
+        };
+        let err = pkg.validate().unwrap_err();
+        assert!(err.contains("recommended_next_action"), "error: {err}");
+    }
+
+    #[test]
+    fn test_evidence_without_review_surface_is_invalid() {
+        let pkg = DeliveryPackage {
+            package_id: Some("dp-001".into()),
+            delivery_contract_id: Some("dc-001".into()),
+            result_summary: None,
+            evidence_refs: Some(vec![EvidenceRef {
+                artifact: "run".into(),
+                path: "run.summary".into(),
+                value: "passed".into(),
+            }]),
+            review_surface_refs: None,
+            open_risks: None,
+            unresolved_items: None,
+            recommended_next_action: None,
+            delivery_status: None,
+            trace_context: None,
+        };
+        let err = pkg.validate().unwrap_err();
+        assert!(err.contains("review_surface_refs"), "error: {err}");
+    }
+
+    #[test]
+    fn test_evidence_with_empty_review_surface_is_invalid() {
+        let pkg = DeliveryPackage {
+            package_id: Some("dp-001".into()),
+            delivery_contract_id: Some("dc-001".into()),
+            result_summary: None,
+            evidence_refs: Some(vec![EvidenceRef {
+                artifact: "run".into(),
+                path: "run.summary".into(),
+                value: "passed".into(),
+            }]),
+            review_surface_refs: Some(vec![]),
+            open_risks: None,
+            unresolved_items: None,
+            recommended_next_action: None,
+            delivery_status: None,
+            trace_context: None,
+        };
+        let err = pkg.validate().unwrap_err();
+        assert!(err.contains("review_surface_refs"), "error: {err}");
+    }
+
+    #[test]
+    fn test_local_subtask_details_not_required() {
+        // The delivery package validates with only the required identity
+        // and delegation contract anchor, without requiring any local
+        // subtask details from either the source or target domain.
+        let pkg = DeliveryPackage {
+            package_id: Some("dp-001".into()),
+            delivery_contract_id: Some("dc-001".into()),
+            result_summary: None,
+            evidence_refs: None,
+            review_surface_refs: None,
+            open_risks: None,
+            unresolved_items: None,
+            recommended_next_action: None,
+            delivery_status: Some(DeliveryStatus::Proposed),
+            trace_context: None,
+        };
+        assert!(pkg.validate().is_ok());
     }
 
     // ------------------------------------------------------------------
@@ -511,7 +762,6 @@ mod tests {
 
     #[test]
     fn test_delivery_status_is_copy() {
-        // Verify Copy semantics — assigning does not move
         let a = DeliveryStatus::Accepted;
         let b = a;
         assert_eq!(a, b);
@@ -588,7 +838,6 @@ mod tests {
 
     #[test]
     fn test_mapping_roundtrip() {
-        // Every supported status maps back to the same string via serde
         for (text, status) in &[
             ("proposed", DeliveryStatus::Proposed),
             ("accepted", DeliveryStatus::Accepted),
@@ -598,7 +847,6 @@ mod tests {
         ] {
             let mapped = DeliveryStatus::try_from(*text).unwrap();
             assert_eq!(mapped, *status);
-            // Serde roundtrip confirms the text form matches
             let serialized = serde_json::to_string(status).unwrap();
             assert_eq!(serialized, format!("\"{text}\""));
         }
@@ -640,33 +888,6 @@ mod tests {
         assert!("pending".parse::<DeliveryStatus>().is_err());
     }
 
-    #[test]
-    fn test_local_subtask_details_not_required() {
-        // The delivery package validates with only the package_type field
-        // and delegation contract anchor, without requiring any local
-        // subtask details from either the source or target domain.
-        for ptype in &[
-            PackageType::Standard,
-            PackageType::Expedited,
-            PackageType::Batch,
-        ] {
-            let pkg = DeliveryPackage {
-                delivery_id: None,
-                source_domain: None,
-                target_domain: None,
-                package_type: *ptype,
-                delegation_contract_id: Some("dc-001".to_string()),
-                ownership_ref: None,
-                payload_summary: None,
-                artifact_count: None,
-            };
-            assert!(
-                pkg.validate().is_ok(),
-                "expected package_type={ptype:?} (only field) to be valid"
-            );
-        }
-    }
-
     // ------------------------------------------------------------------
     // validate_structured error detail tests
     // ------------------------------------------------------------------
@@ -674,51 +895,112 @@ mod tests {
     #[test]
     fn test_validate_structured_missing_delegation_anchor() {
         let pkg = DeliveryPackage {
-            delivery_id: Some("del-001".into()),
-            source_domain: None,
-            target_domain: None,
-            package_type: PackageType::Standard,
-            delegation_contract_id: None,
-            ownership_ref: None,
-            payload_summary: None,
-            artifact_count: None,
+            package_id: Some("dp-001".into()),
+            delivery_contract_id: None,
+            result_summary: None,
+            evidence_refs: None,
+            review_surface_refs: None,
+            open_risks: None,
+            unresolved_items: None,
+            recommended_next_action: None,
+            delivery_status: Some(DeliveryStatus::Proposed),
+            trace_context: None,
         };
         let err = pkg.validate_structured().unwrap_err();
         assert_eq!(err.error, "validation_failed");
         assert_eq!(err.reason, "missing_anchor");
-        assert_eq!(err.field.as_deref(), Some("delegation_contract_id"));
+        assert_eq!(err.field.as_deref(), Some("delivery_contract_id"));
         assert_eq!(err.anchor.as_deref(), Some("delegation"));
     }
 
     #[test]
-    fn test_validate_structured_invalid_artifact_count() {
+    fn test_validate_structured_missing_package_id() {
         let pkg = DeliveryPackage {
-            delivery_id: Some("del-001".into()),
-            source_domain: None,
-            target_domain: None,
-            package_type: PackageType::Standard,
-            delegation_contract_id: Some("dc-001".into()),
-            ownership_ref: None,
-            payload_summary: None,
-            artifact_count: Some(0),
+            package_id: None,
+            delivery_contract_id: Some("dc-001".into()),
+            result_summary: None,
+            evidence_refs: None,
+            review_surface_refs: None,
+            open_risks: None,
+            unresolved_items: None,
+            recommended_next_action: None,
+            delivery_status: None,
+            trace_context: None,
+        };
+        let err = pkg.validate_structured().unwrap_err();
+        assert_eq!(err.error, "validation_failed");
+        assert_eq!(err.reason, "missing_field");
+        assert_eq!(err.field.as_deref(), Some("package_id"));
+        assert_eq!(err.anchor.as_deref(), Some("identity"));
+    }
+
+    #[test]
+    fn test_validate_structured_empty_result_summary() {
+        let pkg = DeliveryPackage {
+            package_id: Some("dp-001".into()),
+            delivery_contract_id: Some("dc-001".into()),
+            result_summary: Some("".into()),
+            evidence_refs: None,
+            review_surface_refs: None,
+            open_risks: None,
+            unresolved_items: None,
+            recommended_next_action: None,
+            delivery_status: None,
+            trace_context: None,
         };
         let err = pkg.validate_structured().unwrap_err();
         assert_eq!(err.error, "validation_failed");
         assert_eq!(err.reason, "invalid_value");
-        assert_eq!(err.field.as_deref(), Some("artifact_count"));
+        assert_eq!(err.field.as_deref(), Some("result_summary"));
+    }
+
+    #[test]
+    fn test_validate_structured_missing_review_surface() {
+        let pkg = DeliveryPackage {
+            package_id: Some("dp-001".into()),
+            delivery_contract_id: Some("dc-001".into()),
+            result_summary: None,
+            evidence_refs: Some(vec![EvidenceRef {
+                artifact: "run".into(),
+                path: "run.summary".into(),
+                value: "passed".into(),
+            }]),
+            review_surface_refs: None,
+            open_risks: None,
+            unresolved_items: None,
+            recommended_next_action: None,
+            delivery_status: None,
+            trace_context: None,
+        };
+        let err = pkg.validate_structured().unwrap_err();
+        assert_eq!(err.error, "validation_failed");
+        assert_eq!(err.reason, "missing_field");
+        assert_eq!(err.field.as_deref(), Some("review_surface_refs"));
+        assert_eq!(err.anchor.as_deref(), Some("review_surface"));
     }
 
     #[test]
     fn test_validate_structured_valid_passes() {
         let pkg = DeliveryPackage {
-            delivery_id: Some("del-001".into()),
-            source_domain: Some("task-graph".into()),
-            target_domain: Some("human-review".into()),
-            package_type: PackageType::Expedited,
-            delegation_contract_id: Some("dc-001".into()),
-            ownership_ref: Some("own-001".into()),
-            payload_summary: Some("test summary".into()),
-            artifact_count: Some(2),
+            package_id: Some("dp-001".into()),
+            delivery_contract_id: Some("dc-001".into()),
+            result_summary: Some("All gates passed".into()),
+            evidence_refs: Some(vec![EvidenceRef {
+                artifact: "run".into(),
+                path: "run.summary".into(),
+                value: "All checks passed".into(),
+            }]),
+            review_surface_refs: Some(vec!["review/approved-001.md".into()]),
+            open_risks: Some(vec![]),
+            unresolved_items: Some(vec![]),
+            recommended_next_action: Some("proceed".into()),
+            delivery_status: Some(DeliveryStatus::Accepted),
+            trace_context: Some(TraceContext {
+                correlation_id: Some("corr-001".into()),
+                task_id: Some("T-001".into()),
+                attempt_id: None,
+                last_event_id: None,
+            }),
         };
         assert!(pkg.validate_structured().is_ok());
     }
@@ -735,45 +1017,53 @@ mod tests {
 
     #[test]
     fn test_delivery_error_missing_anchor_display() {
-        let err = DeliveryError::missing_anchor("delegation_contract_id", "delegation");
+        let err = DeliveryError::missing_anchor("delivery_contract_id", "delegation");
         assert_eq!(
             err.to_string(),
-            "delegation_contract_id is required (delegation anchor)"
+            "delivery_contract_id is required (delegation anchor)"
         );
     }
 
     #[test]
     fn test_delivery_error_invalid_value_display() {
-        let err = DeliveryError::invalid_value("artifact_count");
-        assert_eq!(err.to_string(), "artifact_count must be at least 1 when set");
+        let err = DeliveryError::invalid_value("result_summary");
+        assert_eq!(err.to_string(), "result_summary must be non-empty when set");
+    }
+
+    #[test]
+    fn test_delivery_error_missing_field_display() {
+        let err = DeliveryError::missing_field("review_surface_refs", "review_surface");
+        assert_eq!(err.to_string(), "review_surface_refs is required (review_surface)");
     }
 
     #[test]
     fn test_validate_structured_display_matches_validate() {
-        // Verify that DeliveryError Display output matches the string
-        // produced by validate() for every failure case.
         let cases: Vec<DeliveryPackage> = vec![
             // Missing delegation anchor
             DeliveryPackage {
-                delivery_id: Some("del-001".into()),
-                source_domain: None,
-                target_domain: None,
-                package_type: PackageType::Standard,
-                delegation_contract_id: None,
-                ownership_ref: None,
-                payload_summary: None,
-                artifact_count: None,
+                package_id: Some("dp-001".into()),
+                delivery_contract_id: None,
+                result_summary: None,
+                evidence_refs: None,
+                review_surface_refs: None,
+                open_risks: None,
+                unresolved_items: None,
+                recommended_next_action: None,
+                delivery_status: None,
+                trace_context: None,
             },
-            // Zero artifact count
+            // Empty result_summary
             DeliveryPackage {
-                delivery_id: Some("del-001".into()),
-                source_domain: None,
-                target_domain: None,
-                package_type: PackageType::Standard,
-                delegation_contract_id: Some("dc-001".into()),
-                ownership_ref: None,
-                payload_summary: None,
-                artifact_count: Some(0),
+                package_id: Some("dp-001".into()),
+                delivery_contract_id: Some("dc-001".into()),
+                result_summary: Some("".into()),
+                evidence_refs: None,
+                review_surface_refs: None,
+                open_risks: None,
+                unresolved_items: None,
+                recommended_next_action: None,
+                delivery_status: None,
+                trace_context: None,
             },
         ];
         for pkg in cases {
@@ -803,5 +1093,63 @@ mod tests {
     fn test_validate_status_known_value_ok() {
         let status = DeliveryStatus::validate_status("accepted").unwrap();
         assert_eq!(status, DeliveryStatus::Accepted);
+    }
+
+    // ------------------------------------------------------------------
+    // EvidenceRef and TraceContext tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_evidence_ref_deserialize() {
+        let json = r#"{"artifact":"run","path":"run.summary","value":"passed"}"#;
+        let r: EvidenceRef = serde_json::from_str(json).unwrap();
+        assert_eq!(r.artifact, "run");
+        assert_eq!(r.path, "run.summary");
+        assert_eq!(r.value, "passed");
+    }
+
+    #[test]
+    fn test_evidence_ref_defaults() {
+        let json = r#"{}"#;
+        let r: EvidenceRef = serde_json::from_str(json).unwrap();
+        assert_eq!(r.artifact, "");
+        assert_eq!(r.path, "");
+        assert_eq!(r.value, "");
+    }
+
+    #[test]
+    fn test_trace_context_deserialize() {
+        let json = r#"{"correlation_id":"corr-001","task_id":"T-001"}"#;
+        let tc: TraceContext = serde_json::from_str(json).unwrap();
+        assert_eq!(tc.correlation_id, Some("corr-001".to_string()));
+        assert_eq!(tc.task_id, Some("T-001".to_string()));
+        assert!(tc.attempt_id.is_none());
+        assert!(tc.last_event_id.is_none());
+    }
+
+    #[test]
+    fn test_trace_context_defaults() {
+        let json = r#"{}"#;
+        let tc: TraceContext = serde_json::from_str(json).unwrap();
+        assert!(tc.correlation_id.is_none());
+        assert!(tc.task_id.is_none());
+        assert!(tc.attempt_id.is_none());
+        assert!(tc.last_event_id.is_none());
+    }
+
+    #[test]
+    fn test_trace_context_roundtrip() {
+        let tc = TraceContext {
+            correlation_id: Some("corr-001".into()),
+            task_id: Some("T-001".into()),
+            attempt_id: Some("att-001".into()),
+            last_event_id: None,
+        };
+        let json = serde_json::to_string(&tc).unwrap();
+        let rt: TraceContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(rt.correlation_id, Some("corr-001".to_string()));
+        assert_eq!(rt.task_id, Some("T-001".to_string()));
+        assert_eq!(rt.attempt_id, Some("att-001".to_string()));
+        assert!(rt.last_event_id.is_none());
     }
 }
