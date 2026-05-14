@@ -190,13 +190,25 @@ pub fn evidence_rollup_ingest_logic(rollup: EvidenceRollup) -> impl IntoResponse
 }
 
 /// Pure delivery-status ingest logic, free of AppState / database dependencies.
-pub fn delivery_status_ingest_logic(status: DeliveryStatus) -> impl IntoResponse {
-    let status_str = serde_json::to_string(&status).unwrap_or_else(|_| "unknown".into());
-    let response = serde_json::json!({
-        "status": "accepted",
-        "delivery_status": status_str.trim_matches('"'),
-    });
-    (StatusCode::ACCEPTED, Json(response)).into_response()
+///
+/// Parses the incoming string via [`DeliveryStatus::try_from`] so that unknown
+/// values produce a structured `{"error": "..."}` response rather than a
+/// generic deserialisation error at the HTTP boundary.
+pub fn delivery_status_ingest_logic(status_str: &str) -> impl IntoResponse + use<> {
+    match DeliveryStatus::try_from(status_str) {
+        Ok(status) => {
+            let response = serde_json::json!({
+                "status": "accepted",
+                "delivery_status": status.as_str(),
+            });
+            (StatusCode::ACCEPTED, Json(response)).into_response()
+        }
+        Err(msg) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response(),
+    }
 }
 
 /// Pure ownership ingest logic, free of AppState / database dependencies.
@@ -243,9 +255,9 @@ async fn evidence_rollup_ingest(
 
 async fn delivery_status_ingest(
     State(_state): State<Arc<AppState>>,
-    Json(status): Json<DeliveryStatus>,
+    Json(status_str): Json<String>,
 ) -> impl IntoResponse {
-    delivery_status_ingest_logic(status)
+    delivery_status_ingest_logic(&status_str)
 }
 
 async fn ownership_ingest(
@@ -628,7 +640,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delivery_status_accepted() {
-        let response = delivery_status_ingest_logic(DeliveryStatus::Accepted).into_response();
+        let response = delivery_status_ingest_logic("accepted").into_response();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         let body = body_to_json(response).await;
         assert_eq!(body["status"], "accepted");
@@ -637,7 +649,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delivery_status_needs_revision() {
-        let response = delivery_status_ingest_logic(DeliveryStatus::NeedsRevision).into_response();
+        let response = delivery_status_ingest_logic("needs_revision").into_response();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         let body = body_to_json(response).await;
         assert_eq!(body["status"], "accepted");
@@ -646,14 +658,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_delivery_status_all_variants_return_accepted() {
-        for (variant, expected) in &[
-            (DeliveryStatus::Proposed, "proposed"),
-            (DeliveryStatus::Accepted, "accepted"),
-            (DeliveryStatus::NeedsRevision, "needs_revision"),
-            (DeliveryStatus::Rejected, "rejected"),
-            (DeliveryStatus::Superseded, "superseded"),
+        for (input, expected) in &[
+            ("proposed", "proposed"),
+            ("accepted", "accepted"),
+            ("needs_revision", "needs_revision"),
+            ("rejected", "rejected"),
+            ("superseded", "superseded"),
         ] {
-            let response = delivery_status_ingest_logic(*variant).into_response();
+            let response = delivery_status_ingest_logic(input).into_response();
             assert_eq!(
                 response.status(),
                 StatusCode::ACCEPTED,
@@ -663,6 +675,42 @@ mod tests {
             assert_eq!(body["status"], "accepted");
             assert_eq!(body["delivery_status"], *expected);
         }
+    }
+
+    #[tokio::test]
+    async fn test_delivery_status_unknown_value_returns_unprocessable() {
+        let response = delivery_status_ingest_logic("unknown").into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = body_to_json(response).await;
+        assert!(
+            body["error"].as_str().unwrap().contains("unknown"),
+            "expected error about unknown status, got: {:?}",
+            body["error"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delivery_status_empty_string_returns_unprocessable() {
+        let response = delivery_status_ingest_logic("").into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = body_to_json(response).await;
+        assert!(
+            body["error"].as_str().unwrap().contains("unknown delivery status"),
+            "expected error about unknown status, got: {:?}",
+            body["error"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delivery_status_case_variation_returns_unprocessable() {
+        let response = delivery_status_ingest_logic("Proposed").into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = body_to_json(response).await;
+        assert!(
+            body["error"].as_str().unwrap().contains("unknown delivery status"),
+            "expected error about unknown status, got: {:?}",
+            body["error"]
+        );
     }
 
     // -------------------------------------------------------------------

@@ -1,3 +1,5 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 /// Lifecycle status of a delivery in the LimeNet review surface.
@@ -18,6 +20,29 @@ pub enum DeliveryStatus {
     Rejected,
     /// Delivery has been superseded by a newer delivery
     Superseded,
+}
+
+impl DeliveryStatus {
+    /// Returns the canonical snake_case string representation of this status.
+    ///
+    /// This is the same string that Serde uses for serialization and that
+    /// `TryFrom<&str>` accepts, provided here in O(1) without any
+    /// allocation or serialization overhead.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Proposed => "proposed",
+            Self::Accepted => "accepted",
+            Self::NeedsRevision => "needs_revision",
+            Self::Rejected => "rejected",
+            Self::Superseded => "superseded",
+        }
+    }
+}
+
+impl fmt::Display for DeliveryStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Maps an incoming string to the corresponding [`DeliveryStatus`].
