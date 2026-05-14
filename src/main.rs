@@ -803,7 +803,7 @@ mod tests {
     async fn test_mirror_ownership_ingest_returns_accepted() {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Mirror),
-            backend_kind: Some(BackendKind::Workflow),
+            backend_kind: Some(BackendKind::Json),
             created_from: None,
             promoted_from: None,
         };
@@ -815,10 +815,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_canonical_ownership_ingest_returns_accepted() {
+    async fn test_local_canonical_ownership_ingest_returns_accepted() {
         let ownership = Ownership {
-            ownership_mode: Some(OwnershipMode::Canonical),
-            backend_kind: Some(BackendKind::Task),
+            ownership_mode: Some(OwnershipMode::LocalCanonical),
+            backend_kind: Some(BackendKind::Json),
             created_from: None,
             promoted_from: None,
         };
@@ -826,14 +826,29 @@ mod tests {
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         let body = body_to_json(response).await;
         assert_eq!(body["status"], "accepted");
-        assert_eq!(body["ownership_mode"], "canonical");
+        assert_eq!(body["ownership_mode"], "local_canonical");
+    }
+
+    #[tokio::test]
+    async fn test_remote_canonical_ownership_ingest_returns_accepted() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::RemoteCanonical),
+            backend_kind: Some(BackendKind::RemoteLimenet),
+            created_from: None,
+            promoted_from: None,
+        };
+        let response = ownership_ingest_logic(ownership).into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body_to_json(response).await;
+        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["ownership_mode"], "remote_canonical");
     }
 
     #[tokio::test]
     async fn test_promotion_ownership_ingest_returns_accepted() {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Promotion),
-            backend_kind: Some(BackendKind::Task),
+            backend_kind: Some(BackendKind::Json),
             created_from: None,
             promoted_from: Some("task-001".into()),
         };
@@ -849,7 +864,7 @@ mod tests {
     async fn test_promotion_ownership_ingest_includes_lineage() {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Promotion),
-            backend_kind: Some(BackendKind::Task),
+            backend_kind: Some(BackendKind::Json),
             created_from: None,
             promoted_from: Some("graph-node-42".into()),
         };
@@ -861,10 +876,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_canonical_ownership_ingest_excludes_lineage() {
+    async fn test_local_canonical_ownership_ingest_excludes_lineage() {
         let ownership = Ownership {
-            ownership_mode: Some(OwnershipMode::Canonical),
-            backend_kind: Some(BackendKind::Task),
+            ownership_mode: Some(OwnershipMode::LocalCanonical),
+            backend_kind: Some(BackendKind::Json),
             created_from: None,
             promoted_from: None,
         };
@@ -872,7 +887,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         let body = body_to_json(response).await;
         assert_eq!(body["status"], "accepted");
-        assert_eq!(body["ownership_mode"], "canonical");
+        assert_eq!(body["ownership_mode"], "local_canonical");
         assert!(body.get("promoted_from").is_none());
     }
 
@@ -897,7 +912,7 @@ mod tests {
     async fn test_mirror_with_promoted_from_returns_bad_request() {
         let ownership = Ownership {
             ownership_mode: Some(OwnershipMode::Mirror),
-            backend_kind: Some(BackendKind::Workflow),
+            backend_kind: Some(BackendKind::Json),
             created_from: None,
             promoted_from: Some("task-abc".into()),
         };
@@ -908,6 +923,23 @@ mod tests {
         assert_eq!(body["reason"], "invalid_transition", "reason: {:?}", body["reason"]);
         assert_eq!(body["field"], "promoted_from", "field: {:?}", body["field"]);
         assert_eq!(body["ownership_mode"], "mirror", "mode: {:?}", body["ownership_mode"]);
+    }
+
+    #[tokio::test]
+    async fn test_remote_canonical_without_backend_kind_returns_bad_request() {
+        let ownership = Ownership {
+            ownership_mode: Some(OwnershipMode::RemoteCanonical),
+            backend_kind: None,
+            created_from: None,
+            promoted_from: None,
+        };
+        let response = ownership_ingest_logic(ownership).into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_to_json(response).await;
+        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
+        assert_eq!(body["reason"], "missing_field", "reason: {:?}", body["reason"]);
+        assert_eq!(body["field"], "backend_kind", "field: {:?}", body["field"]);
+        assert_eq!(body["ownership_mode"], "remote_canonical", "mode: {:?}", body["ownership_mode"]);
     }
 
     #[tokio::test]

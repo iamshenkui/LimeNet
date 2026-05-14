@@ -16,7 +16,7 @@ use crate::contracts::{BackendKind, Ownership, OwnershipMode};
 fn mirror_original() -> Ownership {
     Ownership {
         ownership_mode: Some(OwnershipMode::Mirror),
-        backend_kind: Some(BackendKind::Workflow),
+        backend_kind: Some(BackendKind::Json),
         created_from: None,
         promoted_from: None,
     }
@@ -25,7 +25,7 @@ fn mirror_original() -> Ownership {
 fn mirror_derived() -> Ownership {
     Ownership {
         ownership_mode: Some(OwnershipMode::Mirror),
-        backend_kind: Some(BackendKind::Workflow),
+        backend_kind: Some(BackendKind::Json),
         created_from: Some("parent-integration-graph".into()),
         promoted_from: None,
     }
@@ -38,7 +38,7 @@ fn mirror_derived() -> Ownership {
 fn promotion_transfer() -> Ownership {
     Ownership {
         ownership_mode: Some(OwnershipMode::Promotion),
-        backend_kind: Some(BackendKind::Task),
+        backend_kind: Some(BackendKind::Json),
         created_from: None,
         promoted_from: Some("/state/backends/legacy-sqlite".into()),
     }
@@ -47,38 +47,38 @@ fn promotion_transfer() -> Ownership {
 fn promotion_derived_transfer() -> Ownership {
     Ownership {
         ownership_mode: Some(OwnershipMode::Promotion),
-        backend_kind: Some(BackendKind::Task),
+        backend_kind: Some(BackendKind::Json),
         created_from: Some("parent-integration-graph".into()),
         promoted_from: Some("/state/backends/legacy-sqlite".into()),
     }
 }
 
 // ---------------------------------------------------------------------------
-// Canonical-mode lineage fixtures (baseline / control)
+// Local-canonical lineage fixtures (baseline / control)
 // ---------------------------------------------------------------------------
 
-fn canonical_original() -> Ownership {
+fn local_canonical_original() -> Ownership {
     Ownership {
-        ownership_mode: Some(OwnershipMode::Canonical),
-        backend_kind: Some(BackendKind::Task),
+        ownership_mode: Some(OwnershipMode::LocalCanonical),
+        backend_kind: Some(BackendKind::Json),
         created_from: None,
         promoted_from: None,
     }
 }
 
-fn canonical_derived() -> Ownership {
+fn local_canonical_derived() -> Ownership {
     Ownership {
-        ownership_mode: Some(OwnershipMode::Canonical),
-        backend_kind: Some(BackendKind::Task),
+        ownership_mode: Some(OwnershipMode::LocalCanonical),
+        backend_kind: Some(BackendKind::Json),
         created_from: Some("parent-integration-graph".into()),
         promoted_from: None,
     }
 }
 
-fn canonical_derived_promoted() -> Ownership {
+fn local_canonical_derived_promoted() -> Ownership {
     Ownership {
-        ownership_mode: Some(OwnershipMode::Canonical),
-        backend_kind: Some(BackendKind::Task),
+        ownership_mode: Some(OwnershipMode::LocalCanonical),
+        backend_kind: Some(BackendKind::Json),
         created_from: Some("parent-integration-graph".into()),
         promoted_from: Some("/state/backends/legacy-sqlite".into()),
     }
@@ -93,15 +93,15 @@ fn canonical_derived_promoted() -> Ownership {
 ///
 /// The seven cases mirror the meta-agent `ownership_fixture_baseline.py`:
 ///
-/// | Case name                     | Mode        | created_from       | promoted_from      |
-/// |-------------------------------|-------------|--------------------|--------------------|
-/// | `mirror-original`            | Mirror      | —                  | —                  |
-/// | `mirror-derived`             | Mirror      | parent-integration-graph | —             |
-/// | `promotion-transfer`         | Promotion   | —                  | /state/backends/legacy-sqlite |
-/// | `promotion-derived-transfer` | Promotion   | parent-integration-graph | /state/backends/legacy-sqlite |
-/// | `canonical-original`         | Canonical   | —                  | —                  |
-/// | `canonical-derived`          | Canonical   | parent-integration-graph | —             |
-/// | `canonical-derived-promoted` | Canonical   | parent-integration-graph | /state/backends/legacy-sqlite |
+/// | Case name                     | Mode             | created_from       | promoted_from      |
+/// |-------------------------------|------------------|--------------------|--------------------|
+/// | `mirror-original`             | Mirror           | —                  | —                  |
+/// | `mirror-derived`              | Mirror           | parent-integration-graph | —             |
+/// | `promotion-transfer`          | Promotion        | —                  | /state/backends/legacy-sqlite |
+/// | `promotion-derived-transfer`  | Promotion        | parent-integration-graph | /state/backends/legacy-sqlite |
+/// | `local-original`              | LocalCanonical   | —                  | —                  |
+/// | `local-derived`               | LocalCanonical   | parent-integration-graph | —             |
+/// | `local-derived-promoted`      | LocalCanonical   | parent-integration-graph | /state/backends/legacy-sqlite |
 pub struct OwnershipFixtures;
 
 impl OwnershipFixtures {
@@ -111,9 +111,9 @@ impl OwnershipFixtures {
         m.insert("mirror-derived", mirror_derived());
         m.insert("promotion-transfer", promotion_transfer());
         m.insert("promotion-derived-transfer", promotion_derived_transfer());
-        m.insert("canonical-original", canonical_original());
-        m.insert("canonical-derived", canonical_derived());
-        m.insert("canonical-derived-promoted", canonical_derived_promoted());
+        m.insert("local-original", local_canonical_original());
+        m.insert("local-derived", local_canonical_derived());
+        m.insert("local-derived-promoted", local_canonical_derived_promoted());
         m
     }
 
@@ -123,9 +123,9 @@ impl OwnershipFixtures {
             mirror_derived(),
             promotion_transfer(),
             promotion_derived_transfer(),
-            canonical_original(),
-            canonical_derived(),
-            canonical_derived_promoted(),
+            local_canonical_original(),
+            local_canonical_derived(),
+            local_canonical_derived_promoted(),
         ]
     }
 
@@ -153,9 +153,9 @@ mod tests {
         let cases = OwnershipFixtures::records_by_lineage_case();
         assert_eq!(cases.len(), 7);
         let expected_keys: Vec<&str> = vec![
-            "canonical-derived",
-            "canonical-derived-promoted",
-            "canonical-original",
+            "local-derived",
+            "local-derived-promoted",
+            "local-original",
             "mirror-derived",
             "mirror-original",
             "promotion-derived-transfer",
@@ -169,6 +169,7 @@ mod tests {
     fn test_mirror_original_lineage() {
         let r = mirror_original();
         assert_eq!(r.ownership_mode, Some(OwnershipMode::Mirror));
+        assert_eq!(r.backend_kind, Some(BackendKind::Json));
         assert!(r.created_from.is_none());
         assert!(r.promoted_from.is_none());
     }
@@ -177,6 +178,7 @@ mod tests {
     fn test_mirror_derived_lineage() {
         let r = mirror_derived();
         assert_eq!(r.ownership_mode, Some(OwnershipMode::Mirror));
+        assert_eq!(r.backend_kind, Some(BackendKind::Json));
         assert_eq!(r.created_from.as_deref(), Some("parent-integration-graph"));
         assert!(r.promoted_from.is_none());
     }
@@ -185,6 +187,7 @@ mod tests {
     fn test_promotion_transfer_lineage() {
         let r = promotion_transfer();
         assert_eq!(r.ownership_mode, Some(OwnershipMode::Promotion));
+        assert_eq!(r.backend_kind, Some(BackendKind::Json));
         assert!(r.created_from.is_none());
         assert_eq!(
             r.promoted_from.as_deref(),
@@ -196,6 +199,7 @@ mod tests {
     fn test_promotion_derived_transfer_lineage() {
         let r = promotion_derived_transfer();
         assert_eq!(r.ownership_mode, Some(OwnershipMode::Promotion));
+        assert_eq!(r.backend_kind, Some(BackendKind::Json));
         assert_eq!(r.created_from.as_deref(), Some("parent-integration-graph"));
         assert_eq!(
             r.promoted_from.as_deref(),
@@ -204,29 +208,70 @@ mod tests {
     }
 
     #[test]
-    fn test_canonical_original_lineage() {
-        let r = canonical_original();
-        assert_eq!(r.ownership_mode, Some(OwnershipMode::Canonical));
+    fn test_local_canonical_original_lineage() {
+        let r = local_canonical_original();
+        assert_eq!(r.ownership_mode, Some(OwnershipMode::LocalCanonical));
+        assert_eq!(r.backend_kind, Some(BackendKind::Json));
         assert!(r.created_from.is_none());
         assert!(r.promoted_from.is_none());
     }
 
     #[test]
-    fn test_canonical_derived_lineage() {
-        let r = canonical_derived();
-        assert_eq!(r.ownership_mode, Some(OwnershipMode::Canonical));
+    fn test_local_canonical_derived_lineage() {
+        let r = local_canonical_derived();
+        assert_eq!(r.ownership_mode, Some(OwnershipMode::LocalCanonical));
+        assert_eq!(r.backend_kind, Some(BackendKind::Json));
         assert_eq!(r.created_from.as_deref(), Some("parent-integration-graph"));
         assert!(r.promoted_from.is_none());
     }
 
     #[test]
-    fn test_canonical_derived_promoted_lineage() {
-        let r = canonical_derived_promoted();
-        assert_eq!(r.ownership_mode, Some(OwnershipMode::Canonical));
+    fn test_local_canonical_derived_promoted_lineage() {
+        let r = local_canonical_derived_promoted();
+        assert_eq!(r.ownership_mode, Some(OwnershipMode::LocalCanonical));
+        assert_eq!(r.backend_kind, Some(BackendKind::Json));
         assert_eq!(r.created_from.as_deref(), Some("parent-integration-graph"));
         assert_eq!(
             r.promoted_from.as_deref(),
             Some("/state/backends/legacy-sqlite")
         );
+    }
+
+    // -- split-brain guardrail fixture tests ------------------------------
+
+    #[test]
+    fn test_mirror_fixtures_do_not_carry_promoted_from() {
+        // All mirror fixtures must be free of promoted_from to prevent
+        // split-brain where a mirror is mistaken for a promotion target.
+        for record in [mirror_original(), mirror_derived()] {
+            assert!(
+                record.promoted_from.is_none(),
+                "mirror fixture must not carry promoted_from: {:?}",
+                record
+            );
+        }
+    }
+
+    #[test]
+    fn test_promotion_fixtures_carry_promoted_from() {
+        // All promotion fixtures must carry promoted_from to preserve
+        // lineage and prevent implicit dual-write.
+        for record in [promotion_transfer(), promotion_derived_transfer()] {
+            assert!(
+                record.promoted_from.is_some(),
+                "promotion fixture must carry promoted_from: {:?}",
+                record
+            );
+        }
+    }
+
+    #[test]
+    fn test_local_canonical_may_carry_promoted_from() {
+        // Local canonical fixtures may carry promoted_from for historical
+        // lineage tracking (e.g. LOCAL_CANONICAL_DERIVED_PROMOTED).
+        let derived = local_canonical_derived();
+        assert!(derived.promoted_from.is_none());
+        let derived_promoted = local_canonical_derived_promoted();
+        assert!(derived_promoted.promoted_from.is_some());
     }
 }
