@@ -25,12 +25,12 @@
 //!
 //! ## EvidenceRollup — shared Phase 2B wire shape
 //!
-//! All shared fields now align: `summary`, `artifact_refs`, and
-//! `rollup_id` / `evidence_rollup_id` (resolved via serde alias).
-//! Python carries additional fields (`task_id`, `evidence_refs`,
-//! `conclusion`, `trace_context`) that Rust also accepts; Rust carries
-//! additional fields (`source_domain`, `evidence_count`, `delivery_id`)
-//! that Python does not emit.
+//! All shared fields now align: `rollup_id` (→ `evidence_rollup_id` via serde
+//! alias), `task_id`, `summary`, `evidence_refs`, `artifact_refs`, `conclusion`,
+//! and `trace_context`.  Python-emitted evidence payloads deserialize without
+//! loss and round-trip through the ingest handler with identity and artifact
+//! references intact.  Rust-only fields (`source_domain`, `evidence_count`,
+//! `delivery_id`) are accepted when present but are not emitted by Python.
 
 use limenet::contracts::{DeliveryPackage, DeliveryStatus, EvidenceRollup};
 use std::fs;
@@ -230,7 +230,7 @@ fn test_delivery_contract_id_anchors_across_repos() {
 }
 
 // ---------------------------------------------------------------------------
-// Python EvidenceRollup → Rust EvidenceRollup deserialization (partial overlap)
+// Python EvidenceRollup → Rust EvidenceRollup deserialization (shared wire)
 // ---------------------------------------------------------------------------
 
 /// The `summary` field is the primary shared field between Python and Rust
@@ -297,7 +297,9 @@ fn test_summary_only_rollup_deserializes() {
 }
 
 /// All 3 Python-emitted EvidenceRollup fixtures deserialize successfully
-/// as Rust EvidenceRollup structs (extra keys ignored, missing keys become None).
+/// as Rust EvidenceRollup structs and validate under Rust rules.  Shared
+/// identity fields (rollup_id → evidence_rollup_id, task_id) and artifact
+/// references survive deserialization without loss.
 #[test]
 fn test_all_3_python_rollups_deserialize() {
     let fixtures = [
@@ -316,34 +318,153 @@ fn test_all_3_python_rollups_deserialize() {
     }
 }
 
+/// Python-emitted rollup identity fields (rollup_id and task_id) are
+/// preserved when deserialized into Rust, so the rollup retains its
+/// originating task linkage across the repo boundary.
+#[test]
+fn test_evidence_rollup_identity_preserved_from_python() {
+    let json = read_wire_fixture("rollup_standard.json");
+    let rollup: EvidenceRollup =
+        serde_json::from_str(&json).expect("rollup standard must deserialize");
+    assert_eq!(
+        rollup.evidence_rollup_id.as_deref(),
+        Some("er-int2b-005-001"),
+        "rollup_id alias must preserve evidence rollup identity"
+    );
+    assert_eq!(
+        rollup.task_id.as_deref(),
+        Some("INT2B-005-a"),
+        "task_id must preserve originating task linkage"
+    );
+}
+
+/// Python-emitted evidence_refs (inline artifact references) deserialize
+/// into Rust without losing structure or content.
+#[test]
+fn test_evidence_rollup_evidence_refs_preserved_from_python() {
+    let json = read_wire_fixture("rollup_standard.json");
+    let rollup: EvidenceRollup =
+        serde_json::from_str(&json).expect("rollup standard must deserialize");
+    let refs = rollup
+        .evidence_refs
+        .expect("evidence_refs must be present in standard rollup");
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].artifact, "run");
+    assert_eq!(refs[0].path, "run.summary");
+    assert_eq!(refs[0].value, "All acceptance criteria satisfied");
+}
+
+/// Python-emitted conclusion and trace_context deserialize into Rust
+/// so the rollup's decision context and causation chain are preserved.
+#[test]
+fn test_evidence_rollup_conclusion_and_trace_context_preserved_from_python() {
+    let json = read_wire_fixture("rollup_standard.json");
+    let rollup: EvidenceRollup =
+        serde_json::from_str(&json).expect("rollup standard must deserialize");
+    assert_eq!(
+        rollup.conclusion.as_deref(),
+        Some("proceed"),
+        "conclusion must preserve decision context"
+    );
+    let trace = rollup
+        .trace_context
+        .expect("trace_context must be present in standard rollup");
+    assert_eq!(
+        trace.correlation_id.as_deref(),
+        Some("corr-int2b-005-001")
+    );
+    assert_eq!(trace.task_id.as_deref(), Some("INT2B-005-a"));
+    assert_eq!(trace.attempt_id.as_deref(), Some("attempt-001"));
+}
+
 // ---------------------------------------------------------------------------
 // Python EvidenceRollup → Rust validation tests
 // ---------------------------------------------------------------------------
 
-/// Python rollup fields that Rust does not have (task_id, evidence_refs,
-/// conclusion, trace_context) are silently ignored during deserialization.
-/// Rust fields that Python does not emit (source_domain, evidence_count,
-/// delivery_id) become None.  This is correct behavior — neither side
-/// requires the other's extra fields.
+/// Rust-only fields that Python does not emit (source_domain, evidence_count,
+/// delivery_id) become None when deserializing Python-emitted JSON.  All
+/// shared fields (rollup_id → evidence_rollup_id, task_id, summary,
+/// evidence_refs, artifact_refs, conclusion, trace_context) are populated.
 #[test]
 fn test_rust_extra_fields_are_none_in_python_rollups() {
     let json = read_wire_fixture("rollup_standard.json");
     let rollup: EvidenceRollup = serde_json::from_str(&json).unwrap();
+    // Shared fields from Python are present
+    assert!(
+        rollup.evidence_rollup_id.is_some(),
+        "Python rollup_id must map to evidence_rollup_id"
+    );
+    assert!(rollup.task_id.is_some(), "Python task_id must deserialize");
+    assert!(rollup.evidence_refs.is_some(), "Python evidence_refs must deserialize");
+    assert!(rollup.conclusion.is_some(), "Python conclusion must deserialize");
+    assert!(rollup.trace_context.is_some(), "Python trace_context must deserialize");
+    // Rust-only fields absent from Python wire → None
     assert!(rollup.source_domain.is_none(), "Python does not emit source_domain");
     assert!(rollup.evidence_count.is_none(), "Python does not emit evidence_count");
     assert!(rollup.delivery_id.is_none(), "Python does not emit delivery_id");
 }
 
-/// Python extra fields are preserved in the raw JSON but ignored by Rust.
+/// Python extra fields are preserved in the raw JSON and accepted by Rust.
 #[test]
 fn test_python_extra_fields_present_in_raw_json() {
     let json = read_wire_fixture("rollup_standard.json");
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-    // Python-only fields present in JSON
+    // Shared identity and artifact reference fields present in JSON
+    assert!(v["rollup_id"].is_string(), "Python rollup_id must be in raw JSON");
     assert!(v["task_id"].is_string(), "Python task_id must be in raw JSON");
     assert!(v["evidence_refs"].is_array(), "Python evidence_refs must be in raw JSON");
     assert!(v["conclusion"].is_string(), "Python conclusion must be in raw JSON");
     assert!(v["trace_context"].is_object(), "Python trace_context must be in raw JSON");
+}
+
+/// Serialize → deserialize roundtrip of a Python-emitted rollup preserves
+/// all shared identity and artifact reference fields.  This proves that
+/// evidence payloads do not lose rollup identity when crossing the repo
+/// boundary through Rust serialization.
+#[test]
+fn test_python_rollup_serde_roundtrip_preserves_identity() {
+    let json = read_wire_fixture("rollup_standard.json");
+    let rollup: EvidenceRollup =
+        serde_json::from_str(&json).expect("rollup standard must deserialize");
+
+    // Round-trip through Rust serialization
+    let rt_json = serde_json::to_string(&rollup).expect("rollup must serialize");
+    let rt: EvidenceRollup =
+        serde_json::from_str(&rt_json).expect("rollup must re-deserialize");
+
+    // Identity fields preserved
+    assert_eq!(
+        rt.evidence_rollup_id, rollup.evidence_rollup_id,
+        "evidence_rollup_id must survive roundtrip"
+    );
+    assert_eq!(
+        rt.task_id, rollup.task_id,
+        "task_id must survive roundtrip"
+    );
+
+    // Artifact reference fields preserved
+    assert_eq!(
+        rt.artifact_refs, rollup.artifact_refs,
+        "artifact_refs must survive roundtrip"
+    );
+    assert_eq!(
+        rt.evidence_refs, rollup.evidence_refs,
+        "evidence_refs must survive roundtrip"
+    );
+
+    // Context fields preserved
+    assert_eq!(
+        rt.summary, rollup.summary,
+        "summary must survive roundtrip"
+    );
+    assert_eq!(
+        rt.conclusion, rollup.conclusion,
+        "conclusion must survive roundtrip"
+    );
+    assert_eq!(
+        rt.trace_context, rollup.trace_context,
+        "trace_context must survive roundtrip"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -360,14 +481,20 @@ fn test_frozen_delivery_package_deserializes_and_validates() {
     assert!(pkg.validate().is_ok(), "frozen delivery_package.json must validate");
 }
 
-/// The frozen evidence_rollup.json deserializes correctly (partial overlap).
+/// The frozen evidence_rollup.json deserializes correctly with all shared
+/// identity and artifact reference fields preserved.
 #[test]
 fn test_frozen_evidence_rollup_deserializes() {
     let json = read_wire_fixture("frozen_evidence_rollup.json");
     let rollup: EvidenceRollup =
         serde_json::from_str(&json).expect("frozen evidence rollup must deserialize");
+    assert!(rollup.evidence_rollup_id.is_some(), "rollup identity must be preserved");
+    assert!(rollup.task_id.is_some(), "task_id must be preserved");
     assert!(rollup.summary.is_some());
+    assert!(rollup.evidence_refs.is_some(), "evidence_refs must be preserved");
     assert!(rollup.artifact_refs.is_some());
+    assert!(rollup.conclusion.is_some(), "conclusion must be preserved");
+    assert!(rollup.trace_context.is_some(), "trace_context must be preserved");
     assert!(rollup.validate().is_ok());
 }
 

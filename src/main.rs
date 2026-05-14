@@ -183,8 +183,12 @@ pub fn evidence_rollup_ingest_logic(rollup: EvidenceRollup) -> impl IntoResponse
             let response = serde_json::json!({
                 "status": "accepted",
                 "evidence_rollup_id": rollup.evidence_rollup_id,
+                "task_id": rollup.task_id,
                 "summary": rollup.summary,
+                "evidence_refs": rollup.evidence_refs,
                 "artifact_refs": rollup.artifact_refs,
+                "conclusion": rollup.conclusion,
+                "trace_context": rollup.trace_context,
                 "source_domain": rollup.source_domain,
                 "evidence_count": rollup.evidence_count,
                 "delivery_id": rollup.delivery_id,
@@ -1091,8 +1095,12 @@ mod tests {
             let rt: EvidenceRollup =
                 serde_json::from_str(&json).expect("fixture must deserialize");
             assert_eq!(rt.evidence_rollup_id, record.evidence_rollup_id);
+            assert_eq!(rt.task_id, record.task_id);
             assert_eq!(rt.summary, record.summary);
+            assert_eq!(rt.evidence_refs, record.evidence_refs);
             assert_eq!(rt.artifact_refs, record.artifact_refs);
+            assert_eq!(rt.conclusion, record.conclusion);
+            assert_eq!(rt.trace_context, record.trace_context);
             assert_eq!(rt.source_domain, record.source_domain);
             assert_eq!(rt.evidence_count, record.evidence_count);
             assert_eq!(rt.delivery_id, record.delivery_id);
@@ -1134,15 +1142,39 @@ mod tests {
             );
 
             assert_eq!(
+                body["task_id"],
+                serde_json::to_value(&record.task_id).unwrap(),
+                "task_id mismatch for {case_name}"
+            );
+
+            assert_eq!(
                 body["summary"],
                 serde_json::to_value(&record.summary).unwrap(),
                 "summary mismatch for {case_name}"
             );
 
             assert_eq!(
+                body["evidence_refs"],
+                serde_json::to_value(&record.evidence_refs).unwrap(),
+                "evidence_refs mismatch for {case_name}"
+            );
+
+            assert_eq!(
                 body["artifact_refs"],
                 serde_json::to_value(&record.artifact_refs).unwrap(),
                 "artifact_refs mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["conclusion"],
+                serde_json::to_value(&record.conclusion).unwrap(),
+                "conclusion mismatch for {case_name}"
+            );
+
+            assert_eq!(
+                body["trace_context"],
+                serde_json::to_value(&record.trace_context).unwrap(),
+                "trace_context mismatch for {case_name}"
             );
 
             assert_eq!(
