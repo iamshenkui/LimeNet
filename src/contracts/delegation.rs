@@ -1,4 +1,71 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
+
+/// Structured delegation validation error for cross-repo integration comparison.
+///
+/// Each error carries a stable `error` discriminator (`"validation_failed"`),
+/// a `reason` classifying the failure (`missing_field`, `empty_field`),
+/// the `field` involved, and the `anchor` context (`upstream` or `downstream`)
+/// identifying which identity anchor group caused the failure.
+#[derive(Debug, Clone, Serialize)]
+pub struct DelegationError {
+    /// Stable error discriminator — always `"validation_failed"`.
+    pub error: String,
+    /// Structured reason: `"missing_field"` or `"empty_field"`.
+    pub reason: String,
+    /// The field that caused the validation failure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// The identity anchor context: `"upstream"` or `"downstream"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
+}
+
+impl DelegationError {
+    fn missing_field(field: &str, anchor: &str) -> Self {
+        Self {
+            error: "validation_failed".into(),
+            reason: "missing_field".into(),
+            field: Some(field.into()),
+            anchor: Some(anchor.into()),
+        }
+    }
+
+    fn empty_field(field: &str, anchor: &str) -> Self {
+        Self {
+            error: "validation_failed".into(),
+            reason: "empty_field".into(),
+            field: Some(field.into()),
+            anchor: Some(anchor.into()),
+        }
+    }
+}
+
+impl fmt::Display for DelegationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match (self.reason.as_str(), self.field.as_deref()) {
+            ("missing_field", Some("upstream_backend_id")) => {
+                write!(
+                    f,
+                    "upstream_backend_id is required when upstream_work_request_id is set"
+                )
+            }
+            ("missing_field", Some("upstream_work_request_id")) => {
+                write!(
+                    f,
+                    "upstream_work_request_id is required when upstream_task_id is set"
+                )
+            }
+            ("empty_field", Some("downstream_domain_kind")) => {
+                write!(
+                    f,
+                    "downstream_domain_kind must not be empty when downstream_graph_id is set"
+                )
+            }
+            _ => write!(f, "delegation validation failed"),
+        }
+    }
+}
 
 /// Coarse-grained delegation contract for cross-domain task handoffs.
 ///
@@ -37,26 +104,37 @@ impl DelegationContract {
     /// Returns `Ok(())` if all fields are consistent,
     /// or a descriptive error string if validation fails.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_structured().map_err(|e| e.to_string())
+    }
+
+    /// Validates delegation contract field consistency and returns a structured
+    /// [`DelegationError`] on failure, suitable for cross-repo comparison.
+    ///
+    /// The structured error distinguishes missing fields from empty fields and
+    /// surfaces the identity anchor context (`upstream` or `downstream`) involved.
+    pub fn validate_structured(&self) -> Result<(), DelegationError> {
         // Upstream identity anchor: a work request must be traceable to a backend
         if self.upstream_work_request_id.is_some() && self.upstream_backend_id.is_none() {
-            return Err(
-                "upstream_backend_id is required when upstream_work_request_id is set".to_string(),
-            );
+            return Err(DelegationError::missing_field(
+                "upstream_backend_id",
+                "upstream",
+            ));
         }
 
         // Upstream identity anchor: a task must belong to a work request
         if self.upstream_task_id.is_some() && self.upstream_work_request_id.is_none() {
-            return Err(
-                "upstream_work_request_id is required when upstream_task_id is set".to_string(),
-            );
+            return Err(DelegationError::missing_field(
+                "upstream_work_request_id",
+                "upstream",
+            ));
         }
 
         // Downstream identity anchor: graph id without a domain kind is ambiguous
         if self.downstream_graph_id.is_some() && self.downstream_domain_kind.trim().is_empty() {
-            return Err(
-                "downstream_domain_kind must not be empty when downstream_graph_id is set"
-                    .to_string(),
-            );
+            return Err(DelegationError::empty_field(
+                "downstream_domain_kind",
+                "downstream",
+            ));
         }
 
         Ok(())
@@ -247,5 +325,101 @@ mod tests {
             downstream_graph_id: None,
         };
         assert!(contract.validate().is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // validate_structured error detail tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_validate_structured_missing_upstream_backend_id() {
+        let contract = DelegationContract {
+            delegation_id: Some("del-001".into()),
+            upstream_work_request_id: Some("wr-001".into()),
+            upstream_task_id: None,
+            upstream_backend_id: None,
+            downstream_domain_kind: "graph".into(),
+            downstream_graph_id: None,
+        };
+        let err = contract.validate_structured().unwrap_err();
+        assert_eq!(err.error, "validation_failed");
+        assert_eq!(err.reason, "missing_field");
+        assert_eq!(err.field.as_deref(), Some("upstream_backend_id"));
+        assert_eq!(err.anchor.as_deref(), Some("upstream"));
+    }
+
+    #[test]
+    fn test_validate_structured_missing_upstream_work_request_id() {
+        let contract = DelegationContract {
+            delegation_id: Some("del-001".into()),
+            upstream_work_request_id: None,
+            upstream_task_id: Some("task-001".into()),
+            upstream_backend_id: Some("backend-alpha".into()),
+            downstream_domain_kind: "graph".into(),
+            downstream_graph_id: None,
+        };
+        let err = contract.validate_structured().unwrap_err();
+        assert_eq!(err.error, "validation_failed");
+        assert_eq!(err.reason, "missing_field");
+        assert_eq!(err.field.as_deref(), Some("upstream_work_request_id"));
+        assert_eq!(err.anchor.as_deref(), Some("upstream"));
+    }
+
+    #[test]
+    fn test_validate_structured_empty_downstream_domain_kind() {
+        let contract = DelegationContract {
+            delegation_id: None,
+            upstream_work_request_id: None,
+            upstream_task_id: None,
+            upstream_backend_id: None,
+            downstream_domain_kind: "".into(),
+            downstream_graph_id: Some("g-001".into()),
+        };
+        let err = contract.validate_structured().unwrap_err();
+        assert_eq!(err.error, "validation_failed");
+        assert_eq!(err.reason, "empty_field");
+        assert_eq!(err.field.as_deref(), Some("downstream_domain_kind"));
+        assert_eq!(err.anchor.as_deref(), Some("downstream"));
+    }
+
+    #[test]
+    fn test_validate_structured_display_matches_validate() {
+        // Verify that DelegationError Display output matches the string
+        // produced by the original validate() for every failure case.
+        let cases: Vec<DelegationContract> = vec![
+            DelegationContract {
+                delegation_id: Some("del-001".into()),
+                upstream_work_request_id: Some("wr-001".into()),
+                upstream_task_id: None,
+                upstream_backend_id: None,
+                downstream_domain_kind: "graph".into(),
+                downstream_graph_id: None,
+            },
+            DelegationContract {
+                delegation_id: Some("del-001".into()),
+                upstream_work_request_id: None,
+                upstream_task_id: Some("task-001".into()),
+                upstream_backend_id: Some("backend-alpha".into()),
+                downstream_domain_kind: "graph".into(),
+                downstream_graph_id: None,
+            },
+            DelegationContract {
+                delegation_id: None,
+                upstream_work_request_id: None,
+                upstream_task_id: None,
+                upstream_backend_id: None,
+                downstream_domain_kind: "".into(),
+                downstream_graph_id: Some("g-001".into()),
+            },
+        ];
+        for contract in cases {
+            let str_err = contract.validate().unwrap_err();
+            let structured = contract.validate_structured().unwrap_err();
+            assert_eq!(
+                str_err,
+                structured.to_string(),
+                "Display must match validate() for {contract:?}"
+            );
+        }
     }
 }

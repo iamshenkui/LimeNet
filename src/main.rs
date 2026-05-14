@@ -106,8 +106,12 @@ async fn submit_task(
 ///
 /// Returns all received delegation fields in the response so that consumers
 /// can verify correct receipt without field loss or semantic drift.
+///
+/// On validation failure, returns a structured JSON error object with
+/// `error`, `reason`, `field`, and `anchor` fields for stable
+/// cross-repo comparison and explicit identity-anchor surfacing.
 pub fn delegation_ingest_logic(contract: DelegationContract) -> impl IntoResponse {
-    match contract.validate() {
+    match contract.validate_structured() {
         Ok(()) => {
             let response = serde_json::json!({
                 "status": "accepted",
@@ -120,9 +124,9 @@ pub fn delegation_ingest_logic(contract: DelegationContract) -> impl IntoRespons
             });
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
-        Err(msg) => (
+        Err(err) => (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": msg })),
+            Json(serde_json::json!(err)),
         )
             .into_response(),
     }
@@ -404,14 +408,10 @@ mod tests {
         let response = delegation_ingest_logic(contract).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
-        assert!(
-            body["error"]
-                .as_str()
-                .unwrap()
-                .contains("upstream_backend_id"),
-            "expected error about missing upstream_backend_id, got: {:?}",
-            body["error"]
-        );
+        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
+        assert_eq!(body["reason"], "missing_field", "reason: {:?}", body["reason"]);
+        assert_eq!(body["field"], "upstream_backend_id", "field: {:?}", body["field"]);
+        assert_eq!(body["anchor"], "upstream", "anchor: {:?}", body["anchor"]);
     }
 
     #[tokio::test]
@@ -427,14 +427,10 @@ mod tests {
         let response = delegation_ingest_logic(contract).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
-        assert!(
-            body["error"]
-                .as_str()
-                .unwrap()
-                .contains("upstream_work_request_id"),
-            "expected error about missing upstream_work_request_id, got: {:?}",
-            body["error"]
-        );
+        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
+        assert_eq!(body["reason"], "missing_field", "reason: {:?}", body["reason"]);
+        assert_eq!(body["field"], "upstream_work_request_id", "field: {:?}", body["field"]);
+        assert_eq!(body["anchor"], "upstream", "anchor: {:?}", body["anchor"]);
     }
 
     #[tokio::test]
@@ -450,14 +446,10 @@ mod tests {
         let response = delegation_ingest_logic(contract).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
-        assert!(
-            body["error"]
-                .as_str()
-                .unwrap()
-                .contains("downstream_domain_kind"),
-            "expected error about empty downstream_domain_kind, got: {:?}",
-            body["error"]
-        );
+        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
+        assert_eq!(body["reason"], "empty_field", "reason: {:?}", body["reason"]);
+        assert_eq!(body["field"], "downstream_domain_kind", "field: {:?}", body["field"]);
+        assert_eq!(body["anchor"], "downstream", "anchor: {:?}", body["anchor"]);
     }
 
     // -------------------------------------------------------------------

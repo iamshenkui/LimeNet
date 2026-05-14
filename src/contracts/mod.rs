@@ -5,7 +5,7 @@ mod ownership;
 mod review_surface;
 mod task;
 
-pub use delegation::DelegationContract;
+pub use delegation::{DelegationContract, DelegationError};
 pub use delivery::{DeliveryPackage, DeliveryStatus, PackageType};
 pub use evidence_rollup::EvidenceRollup;
 pub use ownership::{BackendKind, Ownership, OwnershipError, OwnershipMode};
