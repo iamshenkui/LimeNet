@@ -3,6 +3,82 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+/// Structured delivery validation error for cross-repo integration comparison.
+///
+/// Each error carries a stable `error` discriminator (`"validation_failed"`),
+/// a `reason` classifying the failure (`unsupported_status`, `missing_anchor`,
+/// `invalid_value`), the `field` and `value` involved, and the `anchor`
+/// context identifying which reference caused the failure.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeliveryError {
+    /// Stable error discriminator — always `"validation_failed"`.
+    pub error: String,
+    /// Structured reason: `"unsupported_status"`, `"missing_anchor"`, or `"invalid_value"`.
+    pub reason: String,
+    /// The field that caused the validation failure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// The invalid or unsupported value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// The anchor context: `"delegation"` or `"ownership"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
+}
+
+impl DeliveryError {
+    fn unsupported_status(value: &str) -> Self {
+        Self {
+            error: "validation_failed".into(),
+            reason: "unsupported_status".into(),
+            field: None,
+            value: Some(value.into()),
+            anchor: None,
+        }
+    }
+
+    fn missing_anchor(field: &str, anchor: &str) -> Self {
+        Self {
+            error: "validation_failed".into(),
+            reason: "missing_anchor".into(),
+            field: Some(field.into()),
+            value: None,
+            anchor: Some(anchor.into()),
+        }
+    }
+
+    fn invalid_value(field: &str) -> Self {
+        Self {
+            error: "validation_failed".into(),
+            reason: "invalid_value".into(),
+            field: Some(field.into()),
+            value: None,
+            anchor: None,
+        }
+    }
+}
+
+impl fmt::Display for DeliveryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.reason.as_str() {
+            "unsupported_status" => {
+                let val = self.value.as_deref().unwrap_or("");
+                write!(f, "unknown delivery status: {val}")
+            }
+            "missing_anchor" => {
+                let field = self.field.as_deref().unwrap_or("field");
+                let anchor = self.anchor.as_deref().unwrap_or("unknown");
+                write!(f, "{field} is required ({anchor} anchor)")
+            }
+            "invalid_value" => {
+                let field = self.field.as_deref().unwrap_or("field");
+                write!(f, "{field} must be at least 1 when set")
+            }
+            _ => write!(f, "delivery validation failed"),
+        }
+    }
+}
+
 /// Lifecycle status of a delivery in the LimeNet review surface.
 ///
 /// Mirrors the shared cross-domain vocabulary so that every
@@ -37,6 +113,16 @@ impl DeliveryStatus {
             Self::Rejected => "rejected",
             Self::Superseded => "superseded",
         }
+    }
+
+    /// Validates an incoming status string and returns a structured
+    /// [`DeliveryError`] on failure, suitable for cross-repo comparison.
+    ///
+    /// Unsupported status values are surfaced explicitly via the
+    /// `"unsupported_status"` reason code and the rejected value
+    /// in the `value` field.
+    pub fn validate_status(value: &str) -> Result<Self, DeliveryError> {
+        Self::try_from(value).map_err(|_| DeliveryError::unsupported_status(value))
     }
 }
 
@@ -177,10 +263,28 @@ impl DeliveryPackage {
     /// review-surface semantics: only field-level sanity is
     /// checked, and no local subtask details are required.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_structured().map_err(|e| e.to_string())
+    }
+
+    /// Validates delivery package field consistency and returns a structured
+    /// [`DeliveryError`] on failure, suitable for cross-repo comparison.
+    ///
+    /// The structured error distinguishes unsupported status values from
+    /// missing anchors, and surfaces the field and anchor context involved.
+    pub fn validate_structured(&self) -> Result<(), DeliveryError> {
+        // The delegation contract anchor is required — every delivery
+        // package must trace back to an authorizing delegation contract.
+        if self.delegation_contract_id.is_none() {
+            return Err(DeliveryError::missing_anchor(
+                "delegation_contract_id",
+                "delegation",
+            ));
+        }
+
         // A delivery package with artifact_count=0 is semantically
         // meaningless — the count describes packaged artifacts in transit
         if let Some(0) = self.artifact_count {
-            return Err("artifact_count must be at least 1 when set".to_string());
+            return Err(DeliveryError::invalid_value("artifact_count"));
         }
 
         Ok(())
@@ -303,7 +407,7 @@ mod tests {
             source_domain: None,
             target_domain: None,
             package_type: PackageType::Standard,
-            delegation_contract_id: None,
+            delegation_contract_id: Some("dc-001".to_string()),
             ownership_ref: None,
             payload_summary: None,
             artifact_count: None,
@@ -333,7 +437,7 @@ mod tests {
             source_domain: None,
             target_domain: None,
             package_type: PackageType::Batch,
-            delegation_contract_id: None,
+            delegation_contract_id: Some("dc-001".to_string()),
             ownership_ref: None,
             payload_summary: None,
             artifact_count: Some(0),
@@ -538,9 +642,9 @@ mod tests {
 
     #[test]
     fn test_local_subtask_details_not_required() {
-        // The delivery package validates with only the package_type field,
-        // without requiring any local subtask details from either the
-        // source or target domain.
+        // The delivery package validates with only the package_type field
+        // and delegation contract anchor, without requiring any local
+        // subtask details from either the source or target domain.
         for ptype in &[
             PackageType::Standard,
             PackageType::Expedited,
@@ -551,7 +655,7 @@ mod tests {
                 source_domain: None,
                 target_domain: None,
                 package_type: *ptype,
-                delegation_contract_id: None,
+                delegation_contract_id: Some("dc-001".to_string()),
                 ownership_ref: None,
                 payload_summary: None,
                 artifact_count: None,
@@ -561,5 +665,143 @@ mod tests {
                 "expected package_type={ptype:?} (only field) to be valid"
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // validate_structured error detail tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_validate_structured_missing_delegation_anchor() {
+        let pkg = DeliveryPackage {
+            delivery_id: Some("del-001".into()),
+            source_domain: None,
+            target_domain: None,
+            package_type: PackageType::Standard,
+            delegation_contract_id: None,
+            ownership_ref: None,
+            payload_summary: None,
+            artifact_count: None,
+        };
+        let err = pkg.validate_structured().unwrap_err();
+        assert_eq!(err.error, "validation_failed");
+        assert_eq!(err.reason, "missing_anchor");
+        assert_eq!(err.field.as_deref(), Some("delegation_contract_id"));
+        assert_eq!(err.anchor.as_deref(), Some("delegation"));
+    }
+
+    #[test]
+    fn test_validate_structured_invalid_artifact_count() {
+        let pkg = DeliveryPackage {
+            delivery_id: Some("del-001".into()),
+            source_domain: None,
+            target_domain: None,
+            package_type: PackageType::Standard,
+            delegation_contract_id: Some("dc-001".into()),
+            ownership_ref: None,
+            payload_summary: None,
+            artifact_count: Some(0),
+        };
+        let err = pkg.validate_structured().unwrap_err();
+        assert_eq!(err.error, "validation_failed");
+        assert_eq!(err.reason, "invalid_value");
+        assert_eq!(err.field.as_deref(), Some("artifact_count"));
+    }
+
+    #[test]
+    fn test_validate_structured_valid_passes() {
+        let pkg = DeliveryPackage {
+            delivery_id: Some("del-001".into()),
+            source_domain: Some("task-graph".into()),
+            target_domain: Some("human-review".into()),
+            package_type: PackageType::Expedited,
+            delegation_contract_id: Some("dc-001".into()),
+            ownership_ref: Some("own-001".into()),
+            payload_summary: Some("test summary".into()),
+            artifact_count: Some(2),
+        };
+        assert!(pkg.validate_structured().is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // DeliveryError tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_delivery_error_unsupported_status_display() {
+        let err = DeliveryError::unsupported_status("bogus");
+        assert_eq!(err.to_string(), "unknown delivery status: bogus");
+    }
+
+    #[test]
+    fn test_delivery_error_missing_anchor_display() {
+        let err = DeliveryError::missing_anchor("delegation_contract_id", "delegation");
+        assert_eq!(
+            err.to_string(),
+            "delegation_contract_id is required (delegation anchor)"
+        );
+    }
+
+    #[test]
+    fn test_delivery_error_invalid_value_display() {
+        let err = DeliveryError::invalid_value("artifact_count");
+        assert_eq!(err.to_string(), "artifact_count must be at least 1 when set");
+    }
+
+    #[test]
+    fn test_validate_structured_display_matches_validate() {
+        // Verify that DeliveryError Display output matches the string
+        // produced by validate() for every failure case.
+        let cases: Vec<DeliveryPackage> = vec![
+            // Missing delegation anchor
+            DeliveryPackage {
+                delivery_id: Some("del-001".into()),
+                source_domain: None,
+                target_domain: None,
+                package_type: PackageType::Standard,
+                delegation_contract_id: None,
+                ownership_ref: None,
+                payload_summary: None,
+                artifact_count: None,
+            },
+            // Zero artifact count
+            DeliveryPackage {
+                delivery_id: Some("del-001".into()),
+                source_domain: None,
+                target_domain: None,
+                package_type: PackageType::Standard,
+                delegation_contract_id: Some("dc-001".into()),
+                ownership_ref: None,
+                payload_summary: None,
+                artifact_count: Some(0),
+            },
+        ];
+        for pkg in cases {
+            let str_err = pkg.validate().unwrap_err();
+            let structured = pkg.validate_structured().unwrap_err();
+            assert_eq!(
+                str_err,
+                structured.to_string(),
+                "Display must match validate() for {pkg:?}"
+            );
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // DeliveryStatus validate_status tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_validate_status_unsupported_value() {
+        let err = DeliveryStatus::validate_status("bogus").unwrap_err();
+        assert_eq!(err.error, "validation_failed");
+        assert_eq!(err.reason, "unsupported_status");
+        assert_eq!(err.value.as_deref(), Some("bogus"));
+    }
+
+    #[test]
+    fn test_validate_status_known_value_ok() {
+        let status = DeliveryStatus::validate_status("accepted").unwrap();
+        assert_eq!(status, DeliveryStatus::Accepted);
     }
 }

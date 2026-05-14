@@ -143,8 +143,12 @@ async fn delegation_ingest(
 ///
 /// Returns all received delivery-package fields in the response so that consumers
 /// can verify correct receipt without field loss or semantic drift.
+///
+/// On validation failure, returns a structured JSON error object with
+/// `error`, `reason`, `field`, `value`, and `anchor` fields for stable
+/// cross-repo comparison and explicit missing-anchor surfacing.
 pub fn delivery_package_ingest_logic(pkg: DeliveryPackage) -> impl IntoResponse {
-    match pkg.validate() {
+    match pkg.validate_structured() {
         Ok(()) => {
             let response = serde_json::json!({
                 "status": "accepted",
@@ -185,9 +189,9 @@ pub fn evidence_rollup_ingest_logic(rollup: EvidenceRollup) -> impl IntoResponse
             });
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
-        Err(msg) => (
+        Err(err) => (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": msg })),
+            Json(serde_json::json!(err)),
         )
             .into_response(),
     }
@@ -195,11 +199,11 @@ pub fn evidence_rollup_ingest_logic(rollup: EvidenceRollup) -> impl IntoResponse
 
 /// Pure delivery-status ingest logic, free of AppState / database dependencies.
 ///
-/// Parses the incoming string via [`DeliveryStatus::try_from`] so that unknown
-/// values produce a structured `{"error": "..."}` response rather than a
-/// generic deserialisation error at the HTTP boundary.
+/// Parses the incoming string via [`DeliveryStatus::validate_status`] so that unknown
+/// values produce a structured `{"error": "...", "reason": "unsupported_status", "value": "..."}`
+/// response rather than a generic deserialisation error at the HTTP boundary.
 pub fn delivery_status_ingest_logic(status_str: &str) -> impl IntoResponse + use<> {
-    match DeliveryStatus::try_from(status_str) {
+    match DeliveryStatus::validate_status(status_str) {
         Ok(status) => {
             let response = serde_json::json!({
                 "status": "accepted",
@@ -207,9 +211,9 @@ pub fn delivery_status_ingest_logic(status_str: &str) -> impl IntoResponse + use
             });
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
-        Err(msg) => (
+        Err(err) => (
             StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": msg })),
+            Json(serde_json::json!(err)),
         )
             .into_response(),
     }
@@ -549,7 +553,7 @@ mod tests {
             source_domain: None,
             target_domain: None,
             package_type: PackageType::Standard,
-            delegation_contract_id: None,
+            delegation_contract_id: Some("dc-001".to_string()),
             ownership_ref: None,
             payload_summary: None,
             artifact_count: None,
@@ -587,7 +591,7 @@ mod tests {
             source_domain: None,
             target_domain: None,
             package_type: PackageType::Batch,
-            delegation_contract_id: None,
+            delegation_contract_id: Some("dc-001".to_string()),
             ownership_ref: None,
             payload_summary: None,
             artifact_count: Some(0),
@@ -595,17 +599,16 @@ mod tests {
         let response = delivery_package_ingest_logic(pkg).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
-        assert!(
-            body["error"].as_str().unwrap().contains("artifact_count"),
-            "expected error about artifact_count, got: {:?}",
-            body["error"]
-        );
+        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
+        assert_eq!(body["reason"], "invalid_value", "reason: {:?}", body["reason"]);
+        assert_eq!(body["field"], "artifact_count", "field: {:?}", body["field"]);
     }
 
     #[tokio::test]
     async fn test_delivery_package_no_local_subtask_details_required() {
-        // Only package_type is required; no local subtask queue details
-        // from either the source or target domain are needed.
+        // Only package_type and delegation contract anchor are required;
+        // no local subtask queue details from either the source or
+        // target domain are needed.
         for ptype in &[
             PackageType::Standard,
             PackageType::Expedited,
@@ -616,7 +619,7 @@ mod tests {
                 source_domain: None,
                 target_domain: None,
                 package_type: *ptype,
-                delegation_contract_id: None,
+                delegation_contract_id: Some("dc-001".to_string()),
                 ownership_ref: None,
                 payload_summary: None,
                 artifact_count: None,
@@ -678,11 +681,9 @@ mod tests {
         let response = delivery_status_ingest_logic("unknown").into_response();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let body = body_to_json(response).await;
-        assert!(
-            body["error"].as_str().unwrap().contains("unknown"),
-            "expected error about unknown status, got: {:?}",
-            body["error"]
-        );
+        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
+        assert_eq!(body["reason"], "unsupported_status", "reason: {:?}", body["reason"]);
+        assert_eq!(body["value"], "unknown", "value: {:?}", body["value"]);
     }
 
     #[tokio::test]
@@ -690,11 +691,9 @@ mod tests {
         let response = delivery_status_ingest_logic("").into_response();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let body = body_to_json(response).await;
-        assert!(
-            body["error"].as_str().unwrap().contains("unknown delivery status"),
-            "expected error about unknown status, got: {:?}",
-            body["error"]
-        );
+        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
+        assert_eq!(body["reason"], "unsupported_status", "reason: {:?}", body["reason"]);
+        assert_eq!(body["value"], "", "value: {:?}", body["value"]);
     }
 
     #[tokio::test]
@@ -702,11 +701,9 @@ mod tests {
         let response = delivery_status_ingest_logic("Proposed").into_response();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let body = body_to_json(response).await;
-        assert!(
-            body["error"].as_str().unwrap().contains("unknown delivery status"),
-            "expected error about unknown status, got: {:?}",
-            body["error"]
-        );
+        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
+        assert_eq!(body["reason"], "unsupported_status", "reason: {:?}", body["reason"]);
+        assert_eq!(body["value"], "Proposed", "value: {:?}", body["value"]);
     }
 
     #[tokio::test]
