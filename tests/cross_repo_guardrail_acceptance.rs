@@ -344,6 +344,155 @@ fn all_baseline_promotion_records_declare_source() {
     }
 }
 
+/// Tightened acceptance slice: deserialize the promotion-transfer ownership
+/// record through the full `Ownership` struct and verify the promotion
+/// non-dual-write guardrail at the type level.
+///
+/// This test goes beyond raw JSON Value inspection — it exercises the
+/// `deserialize_empty_as_none` normalizer (GAP-OWN-03 resolution),
+/// `OwnershipMode` enum deserialization, and `validate_structured()`
+/// enforcement.  It proves that a promotion ownership record crossing the
+/// repo boundary carries an explicit `promoted_from` lineage reference
+/// (the source-backend declaration that prevents dual-write) and that the
+/// ownership mode correctly deserializes as `Promotion`.
+#[test]
+fn promotion_ownership_deserializes_as_structured_promotion() {
+    let v = read_wire_json("ownership_wire", "promotion-transfer.json");
+
+    // Deserialize the promotion fixture through the full Ownership struct
+    let own: Ownership = serde_json::from_value(v)
+        .expect("promotion-transfer.json must deserialize as Ownership");
+
+    // Promotion mode survives the cross-repo structured deserialization
+    assert_eq!(
+        own.ownership_mode,
+        Some(OwnershipMode::Promotion),
+        "promotion ownership_record must deserialize as Promotion"
+    );
+
+    // promoted_from carries the source-backend declaration — the key
+    // dual-write prevention mechanism
+    assert_eq!(
+        own.promoted_from.as_deref(),
+        Some("/state/backends/legacy-sqlite"),
+        "promoted_from must survive cross-repo deserialization — source-backend declaration"
+    );
+
+    // backend_kind normalizes to None (GAP-OWN-01: Python "json" is unknown
+    // to Rust BackendKind)
+    assert!(
+        own.backend_kind.is_none(),
+        "backend_kind 'json' normalizes to None across repo boundary (GAP-OWN-01)"
+    );
+
+    // validate_structured() must accept the deserialized promotion record —
+    // the structured guardrail confirms this is a valid promotion, not a
+    // dual-write
+    let result = own.validate_structured();
+    assert!(
+        result.is_ok(),
+        "deserialized promotion must pass validate_structured(): {:?}",
+        result.err()
+    );
+}
+
+/// Tightened acceptance slice: deserialize the promotion-derived-transfer
+/// ownership record through the full `Ownership` struct and verify that
+/// promotion with both `created_from` (derivation lineage) and
+/// `promoted_from` (source-backend declaration) passes validation.
+///
+/// A derived promotion must still carry `promoted_from` — derivation does
+/// not grant implicit write capability on the source backend.
+#[test]
+fn promotion_derived_ownership_deserializes_as_structured_promotion() {
+    let v = read_wire_json("ownership_wire", "promotion-derived-transfer.json");
+
+    let own: Ownership = serde_json::from_value(v)
+        .expect("promotion-derived-transfer.json must deserialize as Ownership");
+
+    assert_eq!(own.ownership_mode, Some(OwnershipMode::Promotion));
+
+    // created_from carries derivation lineage (normalized from "" to None
+    // in the original fixture, but promotion-derived-transfer has a real value)
+    assert_eq!(
+        own.created_from.as_deref(),
+        Some("parent-integration-graph"),
+        "created_from must survive cross-repo deserialization"
+    );
+
+    // promoted_from carries the source-backend declaration
+    assert_eq!(
+        own.promoted_from.as_deref(),
+        Some("/state/backends/legacy-sqlite"),
+        "promoted_from must survive cross-repo deserialization"
+    );
+
+    // Validation passes: derived promotion with explicit source declaration
+    // is not dual-write
+    assert!(own.validate_structured().is_ok());
+}
+
+/// Prove that the Rust-side `validate_structured()` guardrail correctly
+/// accepts a promotion Ownership record with a valid `promoted_from`.
+///
+/// This test constructs the Ownership struct directly (bypassing the
+/// Python fixture deserialization) to isolate the validator logic from
+/// the GAP-OWN-01 BackendKind mismatch.  Together with the fixture
+/// deserialization test above, it proves that the only remaining barrier
+/// to end-to-end Python → Rust promotion validation is the BackendKind
+/// enum gap.
+#[test]
+fn promotion_structured_validator_accepts_valid_promotion() {
+    let own = Ownership {
+        ownership_mode: Some(OwnershipMode::Promotion),
+        backend_kind: Some(BackendKind::Task),
+        created_from: None,
+        promoted_from: Some("/state/backends/legacy-sqlite".to_string()),
+    };
+    let result = own.validate_structured();
+    assert!(
+        result.is_ok(),
+        "valid promotion ownership must pass validate_structured(): {:?}",
+        result.err()
+    );
+}
+
+/// Prove that the promotion guardrail rejects a promotion Ownership record
+/// that lacks `promoted_from` — the absence of a source-backend declaration
+/// is the dual-write degenerate case.
+#[test]
+fn promotion_structured_validator_rejects_missing_promoted_from() {
+    let own = Ownership {
+        ownership_mode: Some(OwnershipMode::Promotion),
+        backend_kind: Some(BackendKind::Task),
+        created_from: None,
+        promoted_from: None,
+    };
+    let err = own.validate_structured().unwrap_err();
+    assert_eq!(err.error, "validation_failed");
+    assert_eq!(err.reason, "missing_field");
+    assert_eq!(err.field.as_deref(), Some("promoted_from"));
+    assert_eq!(err.ownership_mode.as_deref(), Some("promotion"));
+}
+
+/// Prove that the promotion guardrail rejects a promotion Ownership record
+/// with an empty `promoted_from` — an empty source declaration is
+/// semantically equivalent to no declaration at all.
+#[test]
+fn promotion_structured_validator_rejects_empty_promoted_from() {
+    let own = Ownership {
+        ownership_mode: Some(OwnershipMode::Promotion),
+        backend_kind: Some(BackendKind::Task),
+        created_from: None,
+        promoted_from: Some("".to_string()),
+    };
+    let err = own.validate_structured().unwrap_err();
+    assert_eq!(err.error, "validation_failed");
+    assert_eq!(err.reason, "empty_field");
+    assert_eq!(err.field.as_deref(), Some("promoted_from"));
+    assert_eq!(err.ownership_mode.as_deref(), Some("promotion"));
+}
+
 // ---------------------------------------------------------------------------
 // Cross-boundary delivery: ownership → delivery artifact coherence
 // ---------------------------------------------------------------------------
