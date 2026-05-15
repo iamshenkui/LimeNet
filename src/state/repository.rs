@@ -1,5 +1,5 @@
 use crate::contracts::{Lease, Payload, RetryLogic, Task, TaskRow, TaskStatus};
-use chrono::{DateTime, Utc, TimeDelta};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
@@ -344,11 +344,7 @@ impl<'a> TaskRepository<'a> {
         Ok(Some(task))
     }
 
-    pub async fn release_lease(
-        &self,
-        task_id: Uuid,
-        new_status: TaskStatus,
-    ) -> sqlx::Result<()> {
+    pub async fn release_lease(&self, task_id: Uuid, new_status: TaskStatus) -> sqlx::Result<()> {
         sqlx::query(
             r#"
             UPDATE tasks
@@ -364,12 +360,11 @@ impl<'a> TaskRepository<'a> {
     }
 
     pub async fn list_by_status(&self, status: TaskStatus) -> sqlx::Result<Vec<Task>> {
-        let rows: Vec<TaskRow> = sqlx::query_as(
-            "SELECT * FROM tasks WHERE status = $1 ORDER BY created_at ASC",
-        )
-        .bind(status)
-        .fetch_all(self.pool)
-        .await?;
+        let rows: Vec<TaskRow> =
+            sqlx::query_as("SELECT * FROM tasks WHERE status = $1 ORDER BY created_at ASC")
+                .bind(status)
+                .fetch_all(self.pool)
+                .await?;
 
         Ok(rows.into_iter().map(Into::into).collect())
     }
@@ -409,12 +404,11 @@ impl<'a> TaskRepository<'a> {
             .map(|_| ())
     }
 
-    pub async fn renew_lease(
-        &self,
-        task_id: Uuid,
-        agent_id: &str,
-    ) -> Result<(), HeartbeatError> {
-        let task = self.get(task_id).await?.ok_or(HeartbeatError::TaskNotFound)?;
+    pub async fn renew_lease(&self, task_id: Uuid, agent_id: &str) -> Result<(), HeartbeatError> {
+        let task = self
+            .get(task_id)
+            .await?
+            .ok_or(HeartbeatError::TaskNotFound)?;
 
         if task.status != TaskStatus::InProgress {
             return Err(HeartbeatError::TaskNotFound);
@@ -565,7 +559,9 @@ impl<'a> TaskRepository<'a> {
     pub async fn backoff_task(&self, task_id: Uuid) -> sqlx::Result<()> {
         let task = self.get(task_id).await?.ok_or(sqlx::Error::RowNotFound)?;
 
-        let current_attempt = task.retry_logic.as_ref()
+        let current_attempt = task
+            .retry_logic
+            .as_ref()
             .map(|r| r.attempt_count)
             .unwrap_or(0);
 
@@ -776,12 +772,11 @@ impl DependencyResolver {
             let mut all_parents_completed = true;
 
             for pid in parent_ids {
-                let parent_row: Option<TaskRow> = sqlx::query_as(
-                    "SELECT * FROM tasks WHERE task_id = $1"
-                )
-                .bind(pid)
-                .fetch_optional(&self.pool)
-                .await?;
+                let parent_row: Option<TaskRow> =
+                    sqlx::query_as("SELECT * FROM tasks WHERE task_id = $1")
+                        .bind(pid)
+                        .fetch_optional(&self.pool)
+                        .await?;
 
                 match parent_row {
                     Some(row) if row.status == TaskStatus::Completed => {}
