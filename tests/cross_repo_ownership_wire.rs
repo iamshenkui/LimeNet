@@ -25,14 +25,12 @@
 //!
 //! ## Structural gaps documented here
 //!
-//! - **GAP-OWN-01** — BackendKind enum mismatch: Python uses `json` /
-//!   `local_limenet` / `remote_limenet` / `sqlite` / `postgres`; Rust uses
-//!   `task` / `workflow`.  Shared `OwnershipMode` values (`mirror`,
-//!   `promotion`) deserialize correctly, but `backend_kind` is lost.
-//! - **GAP-OWN-02** — OwnershipMode enum mismatch: Python has
-//!   `local_canonical` / `remote_canonical`; Rust has a single `canonical`
-//!   variant.  Python `local_canonical` records fail to deserialize as
-//!   Rust `OwnershipMode`.
+//! - **GAP-OWN-01** — Resolved: BackendKind enum vocabulary is now shared
+//!   across Python and Rust (`json`, `local_limenet`, `remote_limenet`,
+//!   `sqlite`, `postgres`).
+//! - **GAP-OWN-02** — Resolved: OwnershipMode enum vocabulary is now shared
+//!   across Python and Rust (`local_canonical`, `remote_canonical`,
+//!   `mirror`, `promotion`).
 //! - **GAP-OWN-03** — Empty-string vs Option::None for `promoted_from`:
 //!   Python emits `"promoted_from": ""` for "not set"; Rust serde maps
 //!   this to `Some("")`, triggering the mirror `invalid_transition` check
@@ -231,58 +229,48 @@ fn test_ownership_mode_promotion_deserializes_from_python() {
 }
 
 #[test]
-fn test_ownership_mode_canonical_deserializes_from_python() {
-    let json = r#""canonical""#;
-    let mode: OwnershipMode =
-        serde_json::from_str(json).expect("'canonical' must deserialize as OwnershipMode::Canonical");
-    assert_eq!(mode, OwnershipMode::Canonical);
-}
-
-// ---------------------------------------------------------------------------
-// GAP-OWN-02: Python "local_canonical" does not map to Rust "canonical"
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_ownership_mode_local_canonical_rejected_by_rust() {
-    // Python uses "local_canonical" and "remote_canonical";
-    // Rust uses "canonical".  The string "local_canonical" is not a
-    // valid Rust OwnershipMode variant.
+fn test_ownership_mode_local_canonical_deserializes_from_python() {
     let json = r#""local_canonical""#;
-    let result: Result<OwnershipMode, _> = serde_json::from_str(json);
-    assert!(
-        result.is_err(),
-        "Python 'local_canonical' must be rejected by Rust OwnershipMode: GAP-OWN-02"
-    );
+    let mode: OwnershipMode = serde_json::from_str(json)
+        .expect("'local_canonical' must deserialize as OwnershipMode::LocalCanonical");
+    assert_eq!(mode, OwnershipMode::LocalCanonical);
 }
 
-// ---------------------------------------------------------------------------
-// GAP-OWN-01: BackendKind enum mismatch
-// ---------------------------------------------------------------------------
+#[test]
+fn test_ownership_mode_remote_canonical_deserializes_from_python() {
+    let json = r#""remote_canonical""#;
+    let mode: OwnershipMode = serde_json::from_str(json)
+        .expect("'remote_canonical' must deserialize as OwnershipMode::RemoteCanonical");
+    assert_eq!(mode, OwnershipMode::RemoteCanonical);
+}
 
 #[test]
-fn test_backend_kind_json_rejected_by_rust() {
+fn test_backend_kind_json_deserializes_from_python() {
     let json = r#""json""#;
-    let result: Result<BackendKind, _> = serde_json::from_str(json);
-    assert!(
-        result.is_err(),
-        "Python backend_kind 'json' must be rejected by Rust BackendKind: GAP-OWN-01"
-    );
+    let kind: BackendKind = serde_json::from_str(json)
+        .expect("'json' must deserialize as BackendKind::Json");
+    assert_eq!(kind, BackendKind::Json);
 }
 
 #[test]
-fn test_all_python_backend_kinds_rejected_by_rust() {
-    for py_kind in &["json", "local_limenet", "remote_limenet", "sqlite", "postgres"] {
+fn test_all_python_backend_kinds_deserialize_in_rust() {
+    let cases = [
+        ("json", BackendKind::Json),
+        ("local_limenet", BackendKind::LocalLimenet),
+        ("remote_limenet", BackendKind::RemoteLimenet),
+        ("sqlite", BackendKind::Sqlite),
+        ("postgres", BackendKind::Postgres),
+    ];
+    for (py_kind, expected) in &cases {
         let json = format!("\"{py_kind}\"");
-        let result: Result<BackendKind, _> = serde_json::from_str(&json);
-        assert!(
-            result.is_err(),
-            "Python backend_kind '{py_kind}' must be rejected by Rust BackendKind: GAP-OWN-01"
-        );
+        let kind: BackendKind = serde_json::from_str(&json)
+            .unwrap_or_else(|e| panic!("{py_kind} must deserialize as BackendKind: {e}"));
+        assert_eq!(kind, *expected);
     }
 }
 
 // ---------------------------------------------------------------------------
-// Partial deserialization — OwnershipMode crosses, BackendKind lost
+// Partial deserialization — shared ownership vocabulary survives the boundary
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -298,13 +286,13 @@ fn test_mirror_fixture_partial_deserialize_ownership_mode_preserved() {
 }
 
 #[test]
-fn test_mirror_fixture_partial_deserialize_backend_kind_lost() {
+fn test_mirror_fixture_partial_deserialize_backend_kind_preserved() {
     let json = read_wire_fixture("mirror-original.json");
     let ownership: Ownership = serde_json::from_str(&json)
         .expect("mirror-original.json must partially deserialize as Ownership");
     assert!(
-        ownership.backend_kind.is_none(),
-        "Python backend_kind 'json' does not map to Rust BackendKind: GAP-OWN-01"
+        ownership.backend_kind == Some(BackendKind::Json),
+        "Python backend_kind 'json' must survive cross-repo deserialization"
     );
 }
 
@@ -357,9 +345,7 @@ fn test_promotion_derived_fixture_partial_deserialize_both_lineage_preserved() {
 /// mirror `invalid_transition` guardrail does not produce a false positive.
 ///
 /// GAP-OWN-03 is resolved for `promoted_from` and `created_from` at the
-/// serde deserialization layer.  The remaining barrier for Python mirror
-/// fixtures passing `validate_structured()` is GAP-OWN-01 (BackendKind
-/// mismatch — `"json"` does not map to Rust `BackendKind`).
+/// serde deserialization layer.
 #[test]
 fn test_mirror_fixture_empty_promoted_from_normalized_to_none() {
     let json = read_wire_fixture("mirror-original.json");
@@ -375,13 +361,8 @@ fn test_mirror_fixture_empty_promoted_from_normalized_to_none() {
     );
     // Mirror mode is still correctly deserialized
     assert_eq!(ownership.ownership_mode, Some(OwnershipMode::Mirror));
-    // BackendKind is None (GAP-OWN-01), so validate_structured() still
-    // fails — but now it fails on the real gap (missing backend_kind)
-    // rather than the false-positive invalid_transition.
-    let err = ownership.validate_structured().unwrap_err();
-    assert_eq!(err.reason, "missing_field");
-    assert_eq!(err.field.as_deref(), Some("backend_kind"));
-    assert_eq!(err.ownership_mode.as_deref(), Some("mirror"));
+    assert_eq!(ownership.backend_kind, Some(BackendKind::Json));
+    assert!(ownership.validate_structured().is_ok());
 }
 
 #[test]
@@ -405,7 +386,7 @@ fn test_mirror_fixture_empty_promoted_from_valid_in_python_raw() {
 fn test_mirror_valid_passes_rust_validation() {
     let ownership = Ownership {
         ownership_mode: Some(OwnershipMode::Mirror),
-        backend_kind: Some(BackendKind::Task),
+        backend_kind: Some(BackendKind::Json),
         created_from: None,
         promoted_from: None,
     };
@@ -439,7 +420,7 @@ fn test_mirror_without_backend_kind_rejected() {
 fn test_mirror_with_promoted_from_rejected_invalid_transition() {
     let ownership = Ownership {
         ownership_mode: Some(OwnershipMode::Mirror),
-        backend_kind: Some(BackendKind::Workflow),
+        backend_kind: Some(BackendKind::LocalLimenet),
         created_from: None,
         promoted_from: Some("/state/backends/legacy-sqlite".to_string()),
     };
@@ -456,7 +437,7 @@ fn test_mirror_with_promoted_from_rejected_invalid_transition() {
 fn test_mirror_derived_without_promoted_from_passes() {
     let ownership = Ownership {
         ownership_mode: Some(OwnershipMode::Mirror),
-        backend_kind: Some(BackendKind::Workflow),
+        backend_kind: Some(BackendKind::RemoteLimenet),
         created_from: Some("parent-integration-graph".to_string()),
         promoted_from: None,
     };
@@ -473,7 +454,7 @@ fn test_mirror_derived_without_promoted_from_passes() {
 fn test_promotion_with_promoted_from_passes() {
     let ownership = Ownership {
         ownership_mode: Some(OwnershipMode::Promotion),
-        backend_kind: Some(BackendKind::Task),
+        backend_kind: Some(BackendKind::Json),
         created_from: None,
         promoted_from: Some("/state/backends/legacy-sqlite".to_string()),
     };
@@ -486,7 +467,7 @@ fn test_promotion_with_promoted_from_passes() {
 fn test_promotion_without_promoted_from_rejected_missing_field() {
     let ownership = Ownership {
         ownership_mode: Some(OwnershipMode::Promotion),
-        backend_kind: Some(BackendKind::Task),
+        backend_kind: Some(BackendKind::Json),
         created_from: None,
         promoted_from: None,
     };
@@ -503,7 +484,7 @@ fn test_promotion_without_promoted_from_rejected_missing_field() {
 fn test_promotion_with_empty_promoted_from_rejected() {
     let ownership = Ownership {
         ownership_mode: Some(OwnershipMode::Promotion),
-        backend_kind: Some(BackendKind::Task),
+        backend_kind: Some(BackendKind::Json),
         created_from: None,
         promoted_from: Some("".to_string()),
     };
@@ -518,7 +499,7 @@ fn test_promotion_with_empty_promoted_from_rejected() {
 fn test_promotion_with_whitespace_promoted_from_rejected() {
     let ownership = Ownership {
         ownership_mode: Some(OwnershipMode::Promotion),
-        backend_kind: Some(BackendKind::Task),
+        backend_kind: Some(BackendKind::Json),
         created_from: None,
         promoted_from: Some("   ".to_string()),
     };

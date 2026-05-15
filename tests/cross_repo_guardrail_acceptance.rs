@@ -208,17 +208,14 @@ fn mirror_delivery_ownership_deserializes_as_structured_mirror() {
 /// accepts a mirror Ownership record with valid BackendKind and no
 /// promotion lineage.
 ///
-/// This test constructs the Ownership struct directly (bypassing the
-/// Python fixture deserialization) to isolate the validator logic from
-/// the GAP-OWN-01 BackendKind mismatch.  Together with the fixture
-/// deserialization test above, it proves that the only remaining barrier
-/// to end-to-end Python → Rust mirror validation is the BackendKind
-/// enum gap.
+/// This test constructs the Ownership struct directly to isolate the
+/// validator logic from fixture parsing and prove that mirror semantics
+/// hold for the shared backend vocabulary.
 #[test]
 fn mirror_structured_validator_accepts_valid_mirror() {
     let own = Ownership {
         ownership_mode: Some(OwnershipMode::Mirror),
-        backend_kind: Some(BackendKind::Task),
+        backend_kind: Some(BackendKind::Json),
         created_from: Some("parent-integration-graph".to_string()),
         promoted_from: None,
     };
@@ -237,7 +234,7 @@ fn mirror_structured_validator_accepts_valid_mirror() {
 fn mirror_structured_validator_rejects_promotion_lineage() {
     let own = Ownership {
         ownership_mode: Some(OwnershipMode::Mirror),
-        backend_kind: Some(BackendKind::Workflow),
+        backend_kind: Some(BackendKind::LocalLimenet),
         created_from: None,
         promoted_from: Some("/state/backends/legacy-sqlite".to_string()),
     };
@@ -380,12 +377,7 @@ fn promotion_ownership_deserializes_as_structured_promotion() {
         "promoted_from must survive cross-repo deserialization — source-backend declaration"
     );
 
-    // backend_kind normalizes to None (GAP-OWN-01: Python "json" is unknown
-    // to Rust BackendKind)
-    assert!(
-        own.backend_kind.is_none(),
-        "backend_kind 'json' normalizes to None across repo boundary (GAP-OWN-01)"
-    );
+    assert_eq!(own.backend_kind, Some(BackendKind::Json));
 
     // validate_structured() must accept the deserialized promotion record —
     // the structured guardrail confirms this is a valid promotion, not a
@@ -437,17 +429,14 @@ fn promotion_derived_ownership_deserializes_as_structured_promotion() {
 /// Prove that the Rust-side `validate_structured()` guardrail correctly
 /// accepts a promotion Ownership record with a valid `promoted_from`.
 ///
-/// This test constructs the Ownership struct directly (bypassing the
-/// Python fixture deserialization) to isolate the validator logic from
-/// the GAP-OWN-01 BackendKind mismatch.  Together with the fixture
-/// deserialization test above, it proves that the only remaining barrier
-/// to end-to-end Python → Rust promotion validation is the BackendKind
-/// enum gap.
+/// This test constructs the Ownership struct directly to isolate the
+/// validator logic from fixture parsing and prove that promotion semantics
+/// hold for the shared backend vocabulary.
 #[test]
 fn promotion_structured_validator_accepts_valid_promotion() {
     let own = Ownership {
         ownership_mode: Some(OwnershipMode::Promotion),
-        backend_kind: Some(BackendKind::Task),
+        backend_kind: Some(BackendKind::Json),
         created_from: None,
         promoted_from: Some("/state/backends/legacy-sqlite".to_string()),
     };
@@ -466,7 +455,7 @@ fn promotion_structured_validator_accepts_valid_promotion() {
 fn promotion_structured_validator_rejects_missing_promoted_from() {
     let own = Ownership {
         ownership_mode: Some(OwnershipMode::Promotion),
-        backend_kind: Some(BackendKind::Task),
+        backend_kind: Some(BackendKind::Json),
         created_from: None,
         promoted_from: None,
     };
@@ -484,7 +473,7 @@ fn promotion_structured_validator_rejects_missing_promoted_from() {
 fn promotion_structured_validator_rejects_empty_promoted_from() {
     let own = Ownership {
         ownership_mode: Some(OwnershipMode::Promotion),
-        backend_kind: Some(BackendKind::Task),
+        backend_kind: Some(BackendKind::Json),
         created_from: None,
         promoted_from: Some("".to_string()),
     };

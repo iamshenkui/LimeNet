@@ -138,20 +138,21 @@ pub enum BackendKind {
 /// Custom deserializer for `Option<BackendKind>` that maps unknown backend_kind
 /// strings to `None` instead of failing deserialization.
 ///
-/// GAP-OWN-01: Python's BackendKind includes `json`, `local_limenet`,
-/// `remote_limenet`, `sqlite`, and `postgres` — none of which map to
-/// Rust's `Task` or `Workflow` variants.  Rather than rejecting the entire
-/// `Ownership` record, we silently drop the unknown backend_kind so that
-/// `ownership_mode`, `promoted_from`, and `created_from` can still be
-/// validated across the repo boundary.
+/// The shared Phase 2B backend vocabulary is now aligned across Python and
+/// Rust (`json`, `local_limenet`, `remote_limenet`, `sqlite`, `postgres`).
+/// We still deserialize leniently so future backend kinds can be introduced
+/// without breaking ownership fixture loading in older LimeNet revisions.
 fn deserialize_lenient_backend_kind<'de, D>(deserializer: D) -> Result<Option<BackendKind>, D::Error>
 where
     D: Deserializer<'de>,
 {
     let opt_str: Option<String> = Option::deserialize(deserializer)?;
     Ok(opt_str.and_then(|s| match s.as_str() {
-        "task" => Some(BackendKind::Task),
-        "workflow" => Some(BackendKind::Workflow),
+        "json" => Some(BackendKind::Json),
+        "local_limenet" => Some(BackendKind::LocalLimenet),
+        "remote_limenet" => Some(BackendKind::RemoteLimenet),
+        "sqlite" => Some(BackendKind::Sqlite),
+        "postgres" => Some(BackendKind::Postgres),
         _ => None,
     }))
 }

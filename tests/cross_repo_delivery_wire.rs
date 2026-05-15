@@ -350,10 +350,13 @@ fn test_evidence_rollup_evidence_refs_preserved_from_python() {
     let refs = rollup
         .evidence_refs
         .expect("evidence_refs must be present in standard rollup");
-    assert_eq!(refs.len(), 1);
+    assert_eq!(refs.len(), 2);
     assert_eq!(refs[0].artifact, "run");
-    assert_eq!(refs[0].path, "run.summary");
-    assert_eq!(refs[0].value, "All acceptance criteria satisfied");
+    assert_eq!(refs[0].path, "run.outcome");
+    assert_eq!(refs[0].value, "candidate_done");
+    assert_eq!(refs[1].artifact, "decision");
+    assert_eq!(refs[1].path, "decision.verdict");
+    assert_eq!(refs[1].value, "accept");
 }
 
 /// Python-emitted conclusion and trace_context deserialize into Rust
@@ -373,7 +376,7 @@ fn test_evidence_rollup_conclusion_and_trace_context_preserved_from_python() {
         .expect("trace_context must be present in standard rollup");
     assert_eq!(
         trace.correlation_id.as_deref(),
-        Some("corr-int2b-005-001")
+        Some("delivery-fixture-baseline-001")
     );
     assert_eq!(trace.task_id.as_deref(), Some("INT2B-005-a"));
     assert_eq!(trace.attempt_id.as_deref(), Some("attempt-001"));

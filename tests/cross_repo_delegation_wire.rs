@@ -24,6 +24,8 @@ use std::path::PathBuf;
 fn wire_dir() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir
+    .parent()
+    .unwrap()
         .join(".state")
         .join("artifacts")
         .join("delegation_wire")
