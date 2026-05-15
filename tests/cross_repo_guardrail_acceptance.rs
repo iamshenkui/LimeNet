@@ -1,3 +1,5 @@
+#![cfg(feature = "cross-repo-fixtures")]
+
 //! Cross-repo guardrail acceptance slice.
 //!
 //! Proves two invariants when ownership and delivery artifacts cross the repo

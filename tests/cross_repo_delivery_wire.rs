@@ -1,3 +1,5 @@
+#![cfg(feature = "cross-repo-fixtures")]
+
 //! Cross-repo delivery wire-format integration tests.
 //!
 //! These tests verify that LimeNet can deserialize JSON emitted by the
@@ -65,7 +67,7 @@ fn extract_delivery_status(fixture_name: &str) -> String {
     let v: serde_json::Value = read_wire_fixture_value(fixture_name);
     v["delivery_status"]
         .as_str()
-        .unwrap_or("")
+    .expect("delivery_status must be a string")
         .to_string()
 }
 

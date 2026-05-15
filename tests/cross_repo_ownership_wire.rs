@@ -1,3 +1,5 @@
+#![cfg(feature = "cross-repo-fixtures")]
+
 //! Cross-repo ownership wire-format integration tests.
 //!
 //! These tests validate that the mirror and promotion ownership guardrails

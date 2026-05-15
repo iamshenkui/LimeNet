@@ -1,3 +1,5 @@
+#![cfg(feature = "cross-repo-fixtures")]
+
 //! Cross-repo delegation wire-format integration tests.
 //!
 //! These tests verify that LimeNet's `DelegationContract` can deserialize
