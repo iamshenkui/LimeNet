@@ -188,7 +188,7 @@ export DATABASE_URL=postgres://chenhui@localhost:5432/limenet?options=-csearch_p
 - `capabilities` 已接收但暂未参与任务筛选
 - 若任务没有配置 `validation_script`，当前实现会停留在 `EVALUATING`
 - 依赖解锁当前主要依赖轮询，不是纯事件驱动
-- 配置项已环境变量化（`DATABASE_URL`、`LIMENET_BIND`），其他参数仍以代码内默认值为主
+- 配置项已环境变量化（`DATABASE_URL`、`LIMENET_BIND`、`LIMENET_INSTANCE_ID`），其他参数仍以代码内默认值为主
 - 目前没有 Web UI、鉴权、分布式部署或隔离沙箱
 
 ## 文档维护建议
