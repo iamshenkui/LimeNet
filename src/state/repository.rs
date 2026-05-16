@@ -1,5 +1,6 @@
 use crate::contracts::{Lease, Payload, RetryLogic, Task, TaskRow, TaskStatus};
 use chrono::{DateTime, TimeDelta, Utc};
+use serde_json::Value;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
@@ -258,6 +259,216 @@ impl<'a> TaskRepository<'a> {
             .await?;
 
         Ok(row.map(Into::into))
+    }
+
+    pub async fn list_graph_tasks(&self) -> sqlx::Result<Vec<Value>> {
+        let rows: Vec<(Value,)> = sqlx::query_as(
+            "SELECT task_data FROM graph_tasks ORDER BY task_order ASC"
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(task_data,)| task_data).collect())
+    }
+
+    pub async fn get_graph_task(&self, task_id: &str) -> sqlx::Result<Option<Value>> {
+        let row: Option<(Value,)> = sqlx::query_as(
+            "SELECT task_data FROM graph_tasks WHERE task_id = $1"
+        )
+        .bind(task_id)
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row.map(|(task_data,)| task_data))
+    }
+
+    pub async fn replace_graph_tasks(&self, tasks: &[Value]) -> sqlx::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM graph_tasks").execute(&mut *tx).await?;
+
+        for (index, task) in tasks.iter().enumerate() {
+            let task_id = graph_task_id(task).ok_or_else(|| {
+                sqlx::Error::Protocol("graph task payload missing non-empty task_id".into())
+            })?;
+            sqlx::query(
+                r#"
+                INSERT INTO graph_tasks (task_id, task_order, task_data)
+                VALUES ($1, $2, $3)
+                "#,
+            )
+            .bind(task_id)
+            .bind(index as i32)
+            .bind(task)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn upsert_graph_task(&self, task_id: &str, task: &Value) -> sqlx::Result<()> {
+        let existing_order: Option<(i32,)> = sqlx::query_as(
+            "SELECT task_order FROM graph_tasks WHERE task_id = $1"
+        )
+        .bind(task_id)
+        .fetch_optional(self.pool)
+        .await?;
+
+        let task_order = match existing_order {
+            Some((order,)) => order,
+            None => {
+                let next_order: (Option<i32>,) = sqlx::query_as(
+                    "SELECT MAX(task_order) FROM graph_tasks"
+                )
+                .fetch_one(self.pool)
+                .await?;
+                next_order.0.unwrap_or(-1) + 1
+            }
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO graph_tasks (task_id, task_order, task_data)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (task_id)
+            DO UPDATE SET task_data = EXCLUDED.task_data
+            "#,
+        )
+        .bind(task_id)
+        .bind(task_order)
+        .bind(task)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn insert_graph_tasks_after(
+        &self,
+        anchor_task_id: &str,
+        tasks: &[Value],
+    ) -> Result<(), GraphTaskInsertError> {
+        let mut tx = self.pool.begin().await?;
+
+        let anchor_row: Option<(i32,)> = sqlx::query_as(
+            "SELECT task_order FROM graph_tasks WHERE task_id = $1"
+        )
+        .bind(anchor_task_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((anchor_order,)) = anchor_row else {
+            tx.commit().await?;
+            return Err(GraphTaskInsertError::UnknownAnchor(anchor_task_id.to_string()));
+        };
+
+        for task in tasks {
+            let Some(task_id) = graph_task_id(task) else {
+                tx.commit().await?;
+                return Err(GraphTaskInsertError::InvalidTaskPayload);
+            };
+
+            let exists: Option<(String,)> = sqlx::query_as(
+                "SELECT task_id FROM graph_tasks WHERE task_id = $1"
+            )
+            .bind(&task_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if exists.is_some() {
+                tx.commit().await?;
+                return Err(GraphTaskInsertError::DuplicateTask(task_id));
+            }
+        }
+
+        sqlx::query(
+            "UPDATE graph_tasks SET task_order = task_order + $1 WHERE task_order > $2"
+        )
+        .bind(tasks.len() as i32)
+        .bind(anchor_order)
+        .execute(&mut *tx)
+        .await?;
+
+        for (index, task) in tasks.iter().enumerate() {
+            let task_id = graph_task_id(task).ok_or(GraphTaskInsertError::InvalidTaskPayload)?;
+            sqlx::query(
+                r#"
+                INSERT INTO graph_tasks (task_id, task_order, task_data)
+                VALUES ($1, $2, $3)
+                "#,
+            )
+            .bind(task_id)
+            .bind(anchor_order + 1 + index as i32)
+            .bind(task)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn next_pending_graph_task(
+        &self,
+        exclude_task_ids: &[String],
+    ) -> sqlx::Result<Option<Value>> {
+        let tasks = self.list_graph_tasks().await?;
+        let excluded: HashSet<&str> = exclude_task_ids.iter().map(String::as_str).collect();
+        let completed_ids: HashSet<String> = tasks
+            .iter()
+            .filter(|task| graph_task_status(task).as_deref() == Some("complete"))
+            .filter_map(graph_task_id)
+            .collect();
+
+        let mut candidates: Vec<(usize, i64, Value)> = tasks
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, task)| {
+                let task_id = graph_task_id(&task)?;
+                if graph_task_status(&task).as_deref() != Some("pending") {
+                    return None;
+                }
+                if excluded.contains(task_id.as_str()) {
+                    return None;
+                }
+                let dependencies = graph_task_dependencies(&task);
+                if !dependencies.iter().all(|dep| completed_ids.contains(dep)) {
+                    return None;
+                }
+                Some((index, graph_task_priority(&task), task))
+            })
+            .collect();
+
+        candidates.sort_by(|(index_a, priority_a, _), (index_b, priority_b, _)| {
+            priority_b.cmp(priority_a).then(index_a.cmp(index_b))
+        });
+
+        Ok(candidates.into_iter().next().map(|(_, _, task)| task))
+    }
+
+    pub async fn recover_in_progress_graph_tasks(&self) -> sqlx::Result<i64> {
+        let tasks = self.list_graph_tasks().await?;
+        let mut recovered = 0_i64;
+        let mut tx = self.pool.begin().await?;
+
+        for mut task in tasks {
+            if graph_task_status(&task).as_deref() != Some("in_progress") {
+                continue;
+            }
+            if let Some(status) = task.get_mut("status") {
+                *status = Value::String("pending".to_string());
+            }
+            let task_id = graph_task_id(&task).ok_or_else(|| {
+                sqlx::Error::Protocol("graph task payload missing non-empty task_id".into())
+            })?;
+            sqlx::query(
+                "UPDATE graph_tasks SET task_data = $1 WHERE task_id = $2"
+            )
+            .bind(&task)
+            .bind(task_id)
+            .execute(&mut *tx)
+            .await?;
+            recovered += 1;
+        }
+
+        tx.commit().await?;
+        Ok(recovered)
     }
 
     pub async fn update(&self, task: &Task) -> sqlx::Result<()> {
@@ -695,6 +906,45 @@ impl<'a> TaskRepository<'a> {
     }
 }
 
+#[derive(Debug)]
+pub enum GraphTaskInsertError {
+    UnknownAnchor(String),
+    DuplicateTask(String),
+    InvalidTaskPayload,
+    SqlxError(sqlx::Error),
+}
+
+impl From<sqlx::Error> for GraphTaskInsertError {
+    fn from(err: sqlx::Error) -> Self {
+        GraphTaskInsertError::SqlxError(err)
+    }
+}
+
+fn graph_task_id(task: &Value) -> Option<String> {
+    task.get("task_id")?.as_str().map(str::to_string).filter(|s| !s.is_empty())
+}
+
+fn graph_task_status(task: &Value) -> Option<String> {
+    task.get("status")?.as_str().map(str::to_string)
+}
+
+fn graph_task_priority(task: &Value) -> i64 {
+    task.get("priority").and_then(Value::as_i64).unwrap_or(100)
+}
+
+fn graph_task_dependencies(task: &Value) -> Vec<String> {
+    task.get("dependencies")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub struct DependencyResolver {
     pool: PgPool,
     notify: Arc<Notify>,
@@ -889,8 +1139,8 @@ mod tests {
     use crate::contracts::{Payload, TaskStatus};
 
     async fn test_pool() -> PgPool {
-        let database_url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://chenhui@localhost:5432/postgres".to_string());
+        let database_url = crate::config::resolve_database_url()
+            .expect("DATABASE_URL must be set for tests");
         PgPool::connect(&database_url)
             .await
             .expect("Failed to connect to database")

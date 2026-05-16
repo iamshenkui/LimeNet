@@ -1,0 +1,337 @@
+# Active project config for repo runs.
+# This file lives at <repo-root>/.meta-agent/config.yaml and takes precedence
+# over the user-level fallback at ~/.config/meta-agent/config.yaml.
+# The user-level config may still be legacy schema_version 1; this file is v2.
+# Do not change verified provider base URLs unless you intend to switch endpoints.
+schema_version: 2
+state_backend: local_limenet
+
+limenet:
+  base_url: http://127.0.0.1:3100
+  instance_profile: local
+
+providers:
+  kimi:
+    api_key_env: KIMI_API_KEY
+    base_url_env: KIMI_BASE_URL
+    base_url: https://api.kimi.com/coding/
+    model_env_var: OPENAI_MODEL
+    extra_env: {}
+
+  minimax:
+    api_key_env: MINIMAX_API_KEY
+    base_url_env: MINIMAX_BASE_URL
+    base_url: ""
+    model_env_var: OPENAI_MODEL
+    extra_env: {}
+
+  deepseek:
+    api_key_env: DEEPSEEK_API_KEY
+    base_url_env: DEEPSEEK_BASE_URL
+    base_url: https://api.deepseek.com/anthropic
+    model_env_var: ANTHROPIC_MODEL
+    extra_env:
+      ANTHROPIC_DEFAULT_OPUS_MODEL: deepseek-v4-pro[1m]
+      ANTHROPIC_DEFAULT_SONNET_MODEL: deepseek-v4-pro[1m]
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: deepseek-v4-flash
+      CLAUDE_CODE_SUBAGENT_MODEL: deepseek-v4-flash
+      CLAUDE_CODE_EFFORT_LEVEL: max
+
+  glm:
+    api_key_env: GLM_API_KEY
+    base_url_env: GLM_BASE_URL
+    base_url: https://open.bigmodel.cn/api/anthropic
+    model_env_var: OPENAI_MODEL
+    extra_env: {}
+
+  openrouter:
+    api_key_env: OPENROUTER_API_KEY
+    base_url_env: OPENROUTER_BASE_URL
+    base_url: https://openrouter.ai/api
+    model_env_var: OPENAI_MODEL
+    extra_env: {}
+
+model_profiles:
+  kimi-k2-primary:
+    provider: kimi
+    model: kimi-for-coding
+    enabled: true
+    capabilities:
+      - code
+      - long_context
+      - deep_reasoning
+      - fast_patch
+      - contract_design
+      - review_design
+    modalities:
+      - text
+    context_window: 200000
+    quality:
+      code: 0.92
+      reasoning: 0.90
+      review: 0.88
+    latency_class: normal
+    roles:
+      - worker
+      - arbiter
+      - prd_generator
+      - retrospective_cheap
+      - skill_proposal
+    priority: 1000
+
+  deepseek-flash:
+    provider: deepseek
+    model: deepseek-v4-flash
+    enabled: true
+    capabilities:
+      - code
+      - fast_patch
+    modalities:
+      - text
+    context_window: 64000
+    quality:
+      code: 0.78
+      reasoning: 0.72
+      review: 0.70
+    latency_class: fast
+    roles:
+      - worker
+      - retrospective_cheap
+    priority: 120
+
+  deepseek-pro-long:
+    provider: deepseek
+    model: deepseek-v4-pro[1m]
+    enabled: true
+    capabilities:
+      - code
+      - long_context
+      - deep_reasoning
+    modalities:
+      - text
+    context_window: 1000000
+    quality:
+      code: 0.88
+      reasoning: 0.92
+      review: 0.86
+    latency_class: slow
+    roles:
+      - worker
+      - prd_generator
+      - skill_proposal
+    priority: 110
+
+  glm-5-1:
+    provider: glm
+    model: glm-5.1
+    enabled: true
+    capabilities:
+      - code
+      - long_context
+      - deep_reasoning
+      - review_design
+    modalities:
+      - text
+    context_window: 128000
+    quality:
+      code: 0.86
+      reasoning: 0.88
+      review: 0.88
+    latency_class: normal
+    roles:
+      - arbiter
+      - prd_generator
+      - skill_proposal
+    priority: 100
+
+  openrouter-glm-5-1:
+    provider: openrouter
+    model: z-ai/glm-5.1
+    enabled: true
+    capabilities:
+      - code
+      - long_context
+      - deep_reasoning
+      - review_design
+    modalities:
+      - text
+    context_window: 128000
+    quality:
+      code: 0.84
+      reasoning: 0.87
+      review: 0.87
+    latency_class: normal
+    roles:
+      - arbiter
+      - prd_generator
+      - skill_proposal
+    priority: 90
+
+  openrouter-gemini-vision-fast:
+    provider: openrouter
+    model: google/gemini-3.1-flash-lite-preview
+    enabled: true
+    capabilities:
+      - code
+      - vision
+      - image_input
+      - fast_patch
+    modalities:
+      - text
+      - image
+    context_window: 128000
+    quality:
+      vision: 0.82
+      code: 0.74
+    latency_class: fast
+    roles:
+      - worker
+      - vision_observer
+    priority: 100
+
+roles:
+  worker:
+    mode: priority
+    required_capabilities:
+      - code
+    candidates:
+      - profile: kimi-k2-primary
+        priority: 1000
+      - profile: deepseek-flash
+        priority: 120
+      - profile: deepseek-pro-long
+        priority: 110
+      - profile: openrouter-gemini-vision-fast
+        priority: 100
+
+  arbiter:
+    mode: priority
+    required_capabilities:
+      - code
+    candidates:
+      - profile: kimi-k2-primary
+        priority: 1000
+      - profile: glm-5-1
+        priority: 100
+      - profile: openrouter-glm-5-1
+        priority: 90
+
+  prd_generator:
+    mode: priority
+    required_capabilities:
+      - code
+    candidates:
+      - profile: kimi-k2-primary
+        priority: 1000
+      - profile: deepseek-pro-long
+        priority: 110
+      - profile: glm-5-1
+        priority: 100
+      - profile: openrouter-glm-5-1
+        priority: 90
+
+  retrospective_cheap:
+    mode: priority
+    required_capabilities:
+      - code
+    candidates:
+      - profile: kimi-k2-primary
+        priority: 1000
+      - profile: deepseek-flash
+        priority: 120
+
+  skill_proposal:
+    mode: priority
+    required_capabilities:
+      - code
+    candidates:
+      - profile: kimi-k2-primary
+        priority: 1000
+      - profile: deepseek-pro-long
+        priority: 110
+      - profile: glm-5-1
+        priority: 100
+      - profile: openrouter-glm-5-1
+        priority: 90
+
+  vision_observer:
+    mode: fixed
+    profile: openrouter-gemini-vision-fast
+    required_capabilities:
+      - vision
+      - image_input
+
+strategy:
+  # Worker / one-shot CLI idle watchdog: seconds with no stdout/stderr (default 600).
+  cli_idle_timeout_seconds: 6000
+
+selection:
+  strict: true
+  terminal_states:
+    - completed
+    - token_budget_exhausted
+    - needs_user_decision
+  routing_shortfall_policy: best_available_configured_profile
+  task_policy:
+    default_requirements:
+      capabilities:
+        - code
+      preferred_capabilities:
+        - long_context
+    rules:
+      - when:
+          risk:
+            - high
+        requirements:
+          min_quality:
+            code: 0.84
+            reasoning: 0.82
+          min_context_window: 128000
+        preferences:
+          prefer_higher_quality: true
+      - when:
+          complexity:
+            - high
+        requirements:
+          min_quality:
+            code: 0.84
+            reasoning: 0.84
+          min_context_window: 128000
+        preferences:
+          prefer_higher_quality: true
+      - when:
+          retry_count_gte: 1
+        requirements:
+          min_quality:
+            reasoning: 0.86
+        preferences:
+          prefer_higher_quality: true
+      - when:
+          routing_tags_any:
+            - vision
+            - image
+        requirements:
+          max_latency_class: fast
+        preferences:
+          prefer_higher_quality: true
+  scoring:
+    class_order:
+      latency:
+        - fast
+        - normal
+        - slow
+    weights:
+      role_candidate_priority: 1000
+      profile_priority: 250
+      preferred_capability_match: 40
+      quality_match: 80
+      context_margin: 30
+      lower_latency: 20
+
+connectivity:
+  require_all_configured_providers: false
+  optional_providers:
+    - minimax
+    - deepseek
+    - glm
+    - openrouter

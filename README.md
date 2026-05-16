@@ -18,7 +18,14 @@ sqlx migrate run
 cargo run
 ```
 
-服务默认监听 `0.0.0.0:3000`。
+`DATABASE_URL` **必须显式设置**，没有静默回退默认值。启动时会打印解析后的数据库目标（不含密码），例如：
+
+```text
+LimeNet connecting to database localhost:5432/limenet...
+LimeNet task orchestrator starting on 0.0.0.0:3000...
+```
+
+通过设置不同的 `DATABASE_URL` 和 `LIMENET_BIND` 可以在同一台机器上运行多个完全隔离的实例。详见 `docs/operations.md`。
 
 ## 参考
 

@@ -1,7 +1,10 @@
+pub mod config;
 pub mod contracts;
 pub mod state;
 
-use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
+use axum::{Json, Router, extract::{Path, State}, http::StatusCode, response::IntoResponse, routing::{get, post}};
+use serde::Deserialize;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
@@ -11,13 +14,161 @@ use limenet::contracts::{
     HeartbeatRequest, Ownership,
 };
 use limenet::state::{
-    BackoffAwakener, BatchError, BatchTaskInput, DependencyResolver, HeartbeatError, LeaseReaper,
-    SubmitError, SubmitRequest, TaskRepository,
+    BackoffAwakener, BatchError, BatchTaskInput, DependencyResolver, GraphTaskInsertError,
+    HeartbeatError, LeaseReaper, SubmitError, SubmitRequest, TaskRepository,
 };
 
 #[derive(Clone)]
 struct AppState {
     pool: sqlx::PgPool,
+    instance_id: String,
+    database_target: String,
+    bind_address: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphTasksPayload {
+    tasks: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphInsertPayload {
+    anchor_task_id: String,
+    tasks: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct GraphNextPendingRequest {
+    #[serde(default)]
+    exclude_task_ids: Vec<String>,
+}
+
+async fn list_graph_tasks(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.list_graph_tasks().await {
+        Ok(tasks) => (StatusCode::OK, Json(json!({ "tasks": tasks }))).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_graph_task(
+    State(state): State<Arc<AppState>>,
+    Path(task_id): Path<String>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.get_graph_task(&task_id).await {
+        Ok(Some(task)) => (StatusCode::OK, Json(task)).into_response(),
+        Ok(None) => (StatusCode::OK, Json(json!({ "status": "not_found" }))).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn replace_graph_tasks(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<GraphTasksPayload>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.replace_graph_tasks(&payload.tasks).await {
+        Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn upsert_graph_task(
+    State(state): State<Arc<AppState>>,
+    Path(task_id): Path<String>,
+    Json(task): Json<Value>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.upsert_graph_task(&task_id, &task).await {
+        Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn insert_graph_tasks_after(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<GraphInsertPayload>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.insert_graph_tasks_after(&payload.anchor_task_id, &payload.tasks).await {
+        Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
+        Err(GraphTaskInsertError::UnknownAnchor(task_id)) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Unknown task: {task_id}") })),
+        )
+            .into_response(),
+        Err(GraphTaskInsertError::DuplicateTask(task_id)) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": format!("Task already exists: {task_id}") })),
+        )
+            .into_response(),
+        Err(GraphTaskInsertError::InvalidTaskPayload) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "graph task payload missing non-empty task_id" })),
+        )
+            .into_response(),
+        Err(GraphTaskInsertError::SqlxError(err)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn next_pending_graph_task(
+    State(state): State<Arc<AppState>>,
+    request: Option<Json<GraphNextPendingRequest>>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    let exclude_task_ids = request
+        .map(|Json(body)| body.exclude_task_ids)
+        .unwrap_or_default();
+    match repo.next_pending_graph_task(&exclude_task_ids).await {
+        Ok(Some(task)) => (StatusCode::OK, Json(json!({ "task": task }))).into_response(),
+        Ok(None) => (StatusCode::OK, Json(json!({}))).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn recover_graph_tasks(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.recover_in_progress_graph_tasks().await {
+        Ok(recovered_count) => (
+            StatusCode::OK,
+            Json(json!({ "recovered_count": recovered_count })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 async fn create_tasks_batch(
@@ -59,7 +210,7 @@ async fn claim_task(
 
 async fn heartbeat_task(
     State(state): State<Arc<AppState>>,
-    axum::extract::Path(task_id): axum::extract::Path<uuid::Uuid>,
+    Path(task_id): Path<uuid::Uuid>,
     Json(request): Json<HeartbeatRequest>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
@@ -77,7 +228,7 @@ async fn heartbeat_task(
 
 async fn submit_task(
     State(state): State<Arc<AppState>>,
-    axum::extract::Path(task_id): axum::extract::Path<uuid::Uuid>,
+    Path(task_id): Path<uuid::Uuid>,
     Json(request): Json<SubmitRequest>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
@@ -285,10 +436,58 @@ async fn ownership_ingest(
     ownership_ingest_logic(ownership)
 }
 
+/// Resolve the bind address from an explicit value or the default `0.0.0.0:3000`.
+///
+/// The caller should pass `std::env::var("LIMENET_BIND").ok().as_deref()` when
+/// resolving from the environment so the function stays pure and testable.
+fn resolve_bind_address(env_value: Option<&str>) -> String {
+    env_value
+    .map(|s| s.trim())
+    .filter(|s| !s.is_empty())
+    .map(|s| s.to_string())
+        .unwrap_or_else(|| "0.0.0.0:3000".to_string())
+}
+
+/// Resolve the instance identity from an explicit value or the default `default`.
+///
+/// The caller should pass `std::env::var("LIMENET_INSTANCE_ID").ok().as_deref()` when
+/// resolving from the environment so the function stays pure and testable.
+/// Whitespace is trimmed and empty values fall back to the default so that
+/// accidental blank exports do not produce an unhelpful identity.
+fn resolve_instance_id(env_value: Option<&str>) -> String {
+    env_value
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "default".to_string())
+}
+
+/// Pure health-response logic, free of AppState / database dependencies.
+///
+/// Returns a minimal JSON payload that lets operators verify which LimeNet
+/// instance they are talking to without leaking sensitive configuration.
+pub fn health_response(instance_id: &str, database_target: &str, bind_address: &str) -> impl IntoResponse + use<> {
+    let response = serde_json::json!({
+        "status": "healthy",
+        "instance_id": instance_id,
+        "database_target": database_target,
+        "bind_address": bind_address,
+    });
+    (StatusCode::OK, Json(response))
+}
+
+async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    health_response(&state.instance_id, &state.database_target, &state.bind_address)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://chenhui@localhost:5432/postgres".to_string());
+    let database_url = limenet::config::resolve_database_url()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+    let instance_id = resolve_instance_id(std::env::var("LIMENET_INSTANCE_ID").ok().as_deref());
+    let database_target = limenet::config::display_database_target(&database_url);
+    println!("LimeNet connecting to database {database_target}...");
 
     let pool = sqlx::PgPool::connect(&database_url).await?;
 
@@ -308,9 +507,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         awakener.run().await;
     });
 
-    let state = Arc::new(AppState { pool });
+    let bind_addr = resolve_bind_address(std::env::var("LIMENET_BIND").ok().as_deref());
+
+    let state = Arc::new(AppState {
+        pool,
+        instance_id,
+        database_target,
+        bind_address: bind_addr.clone(),
+    });
 
     let app = Router::new()
+        .route("/health", get(health_handler))
+        .route("/api/v1/graph/tasks", get(list_graph_tasks).post(replace_graph_tasks))
+        .route("/api/v1/graph/tasks/insert", post(insert_graph_tasks_after))
+        .route("/api/v1/graph/tasks/next_pending", post(next_pending_graph_task))
+        .route("/api/v1/graph/tasks/recover", post(recover_graph_tasks))
+        .route("/api/v1/graph/tasks/{task_id}", get(get_graph_task).put(upsert_graph_task))
         .route("/api/v1/tasks/batch", post(create_tasks_batch))
         .route("/api/v1/tasks/claim", post(claim_task))
         .route("/api/v1/tasks/{task_id}/heartbeat", post(heartbeat_task))
@@ -322,8 +534,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/ownership/ingest", post(ownership_ingest))
         .with_state(state);
 
-    let listener = TcpListener::bind("0.0.0.0:3000").await?;
-    println!("LimeNet task orchestrator starting on 0.0.0.0:3000...");
+    let listener = TcpListener::bind(&bind_addr).await?;
+    println!("LimeNet task orchestrator starting on {bind_addr}...");
 
     axum::serve(listener, app).await?;
 
@@ -1272,5 +1484,117 @@ mod tests {
                 "delivery_id mismatch for {case_name}"
             );
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Bind-address resolution tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_bind_address_defaults_to_0_0_0_0_3000() {
+        assert_eq!(resolve_bind_address(None), "0.0.0.0:3000");
+    }
+
+    #[test]
+    fn test_resolve_bind_address_uses_custom_port() {
+        assert_eq!(
+            resolve_bind_address(Some("127.0.0.1:8080")),
+            "127.0.0.1:8080"
+        );
+    }
+
+    #[test]
+    fn test_resolve_bind_address_uses_custom_host_and_port() {
+        assert_eq!(
+            resolve_bind_address(Some("192.168.1.10:9090")),
+            "192.168.1.10:9090"
+        );
+    }
+
+    #[test]
+    fn test_resolve_bind_address_empty_string_falls_back_to_default() {
+        assert_eq!(resolve_bind_address(Some("")), "0.0.0.0:3000");
+    }
+
+    #[test]
+    fn test_resolve_bind_address_whitespace_only_falls_back_to_default() {
+        assert_eq!(resolve_bind_address(Some("   ")), "0.0.0.0:3000");
+    }
+
+    // -------------------------------------------------------------------
+    // Instance-identity resolution tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_instance_id_defaults_to_default() {
+        assert_eq!(resolve_instance_id(None), "default");
+    }
+
+    #[test]
+    fn test_resolve_instance_id_uses_custom_value() {
+        assert_eq!(
+            resolve_instance_id(Some("local-task")),
+            "local-task"
+        );
+    }
+
+    #[test]
+    fn test_resolve_instance_id_trims_whitespace() {
+        assert_eq!(
+            resolve_instance_id(Some("  shared-staging  ")),
+            "shared-staging"
+        );
+    }
+
+    #[test]
+    fn test_resolve_instance_id_empty_string_falls_back() {
+        assert_eq!(resolve_instance_id(Some("")), "default");
+    }
+
+    #[test]
+    fn test_resolve_instance_id_whitespace_only_falls_back() {
+        assert_eq!(resolve_instance_id(Some("   ")), "default");
+    }
+
+    // -------------------------------------------------------------------
+    // Health-response tests
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_health_response_returns_ok() {
+        let response = health_response("local-dev", "localhost:5432/limenet_local", "127.0.0.1:3000")
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_health_response_includes_identity_fields() {
+        let response = health_response("shared-staging", "db.example.com:5432/limenet_shared", "0.0.0.0:3001")
+            .into_response();
+        let body = body_to_json(response).await;
+        assert_eq!(body["status"], "healthy");
+        assert_eq!(body["instance_id"], "shared-staging");
+        assert_eq!(body["database_target"], "db.example.com:5432/limenet_shared");
+        assert_eq!(body["bind_address"], "0.0.0.0:3001");
+    }
+
+    #[tokio::test]
+    async fn test_health_response_does_not_leak_credentials() {
+        // database_target is already credential-stripped by config::display_database_target.
+        // The health endpoint merely echoes what it is given, so we verify it
+        // does not add any extra parsing that could expose secrets.
+        let response = health_response("default", "host:5432/db", "0.0.0.0:3000")
+            .into_response();
+        let body = body_to_json(response).await;
+        let json_str = serde_json::to_string(&body).unwrap();
+        assert!(
+            !json_str.contains("password"),
+            "health response must not contain raw credentials"
+        );
+        assert!(
+            !json_str.contains("secret"),
+            "health response must not contain raw credentials"
+        );
+        assert_eq!(body["database_target"], "host:5432/db");
     }
 }

@@ -18,14 +18,23 @@
 
 确保本地有 PostgreSQL，并创建可访问的数据库。
 
+`DATABASE_URL` **必须显式设置**，不存在静默回退默认值。这样可以在同一台机器或同一集群中安全运行多个 LimeNet 实例，每个实例指向独立的数据库，避免误操作共享数据。
+
 ```bash
 export DATABASE_URL=postgres://<user>:<password>@localhost:5432/<db>
 ```
 
-如果未设置，当前代码会回退到：
+如果未设置，启动会立即失败并给出明确提示：
 
 ```text
-postgres://chenhui@localhost:5432/postgres
+DATABASE_URL is not set. Set it explicitly, e.g. DATABASE_URL=postgres://user@localhost:5432/limenet
+```
+
+启动日志会打印解析后的数据库目标（已脱敏，不含密码）：
+
+```text
+LimeNet connecting to database localhost:5432/limenet...
+LimeNet task orchestrator starting on 0.0.0.0:3000...
 ```
 
 ### 2. 执行迁移
@@ -44,6 +53,101 @@ cargo run
 
 ```text
 0.0.0.0:3000
+```
+
+### 4. 修改监听地址或端口
+
+通过环境变量 `LIMENET_BIND` 可以自定义监听地址和端口：
+
+```bash
+export LIMENET_BIND=127.0.0.1:8080
+cargo run
+```
+
+启动日志会打印实际解析后的地址，例如：
+
+```text
+LimeNet task orchestrator starting on 127.0.0.1:8080...
+```
+
+### 5. 在同一台机器上运行多个实例
+
+每个 LimeNet 实例需要 **独立的 `DATABASE_URL` 数据库** 和独立的 `LIMENET_BIND` 端口，避免数据混用。
+
+推荐做法是为不同用途创建独立的数据库：
+
+```bash
+# 1) 在 PostgreSQL 中创建两个数据库
+psql -c "CREATE DATABASE limenet_local;"
+psql -c "CREATE DATABASE limenet_shared;"
+```
+
+```bash
+# 本地任务实例（本地开发、CI 测试）
+export DATABASE_URL=postgres://chenhui@localhost:5432/limenet_local
+export LIMENET_BIND=127.0.0.1:3000
+cargo run
+```
+
+```bash
+# 共享任务实例（团队共享的 staging / prod）
+export DATABASE_URL=postgres://chenhui@localhost:5432/limenet_shared
+export LIMENET_BIND=0.0.0.0:3001
+cargo run
+```
+
+显式设置 `DATABASE_URL` 能确保不会出现以下误操作：
+- 本地开发时不小心写入共享数据库
+- CI 测试用例污染生产数据
+- 多个实例竞争同一套任务表
+
+### 6. 配置实例身份标识
+
+通过环境变量 `LIMENET_INSTANCE_ID` 可以为每个 LimeNet 实例设置一个可读的身份标识，便于运维区分本地任务后端和共享实例：
+
+```bash
+# 本地开发实例
+export LIMENET_INSTANCE_ID=local-task
+export DATABASE_URL=postgres://chenhui@localhost:5432/limenet_local
+export LIMENET_BIND=127.0.0.1:3000
+cargo run
+```
+
+```bash
+# 共享 staging 实例
+export LIMENET_INSTANCE_ID=shared-staging
+export DATABASE_URL=postgres://chenhui@localhost:5432/limenet_shared
+export LIMENET_BIND=0.0.0.0:3001
+cargo run
+```
+
+如果不设置 `LIMENET_INSTANCE_ID`，默认值为 `"default"`。空白值会被自动回退到默认值，避免意外导出空字符串导致身份丢失。
+
+### 7. 验证当前连接的实例身份
+
+启动后访问 `/health` 端点即可确认当前实例的身份：
+
+```bash
+curl http://127.0.0.1:3000/health
+```
+
+示例输出：
+
+```json
+{
+  "status": "healthy",
+  "instance_id": "local-task",
+  "database_target": "localhost:5432/limenet_local",
+  "bind_address": "127.0.0.1:3000"
+}
+```
+
+运维人员应将 `/health` 作为连接后的第一个检查步骤，确保 `instance_id` 和 `database_target` 与预期一致，防止 meta-agent 或其他客户端指向错误的 LimeNet 实例。
+
+如果需要进一步隔离，也可以在同一个数据库中使用不同的 schema：
+
+```bash
+export DATABASE_URL=postgres://chenhui@localhost:5432/limenet?options=-csearch_path%3Dlocal_tasks
 ```
 
 ## 后台任务间隔
@@ -84,7 +188,7 @@ cargo run
 - `capabilities` 已接收但暂未参与任务筛选
 - 若任务没有配置 `validation_script`，当前实现会停留在 `EVALUATING`
 - 依赖解锁当前主要依赖轮询，不是纯事件驱动
-- 配置项仍以代码内默认值为主，尚未完整环境变量化
+- 配置项已环境变量化（`DATABASE_URL`、`LIMENET_BIND`、`LIMENET_INSTANCE_ID`），其他参数仍以代码内默认值为主
 - 目前没有 Web UI、鉴权、分布式部署或隔离沙箱
 
 ## 文档维护建议

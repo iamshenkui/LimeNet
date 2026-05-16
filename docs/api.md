@@ -8,6 +8,34 @@
 http://127.0.0.1:3000
 ```
 
+## `GET /health`
+
+暴露当前 LimeNet 实例的最小身份标识，供运维人员确认客户端连接的是预期实例。
+
+### Response
+
+- `200 OK`：返回实例身份 JSON
+
+```json
+{
+  "status": "healthy",
+  "instance_id": "local-task",
+  "database_target": "localhost:5432/limenet_local",
+  "bind_address": "127.0.0.1:3000"
+}
+```
+
+字段说明：
+
+- `status`：固定为 `"healthy"`，表示服务正在运行
+- `instance_id`：实例标识符，通过环境变量 `LIMENET_INSTANCE_ID` 配置，默认值为 `"default"`
+- `database_target`：已脱敏的数据库目标地址（不含密码），来自 `DATABASE_URL`
+- `bind_address`：当前服务实际监听的地址和端口
+
+### 用途
+
+运维人员可以通过此端点区分本地任务后端和共享/全局 LimeNet 实例，避免将 meta-agent 指向错误的环境。
+
 ## `POST /api/v1/tasks/batch`
 
 批量写入任务图。
