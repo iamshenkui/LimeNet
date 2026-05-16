@@ -2,7 +2,9 @@ pub mod config;
 pub mod contracts;
 pub mod state;
 
-use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::{get, post}};
+use axum::{Json, Router, extract::{Path, State}, http::StatusCode, response::IntoResponse, routing::{get, post}};
+use serde::Deserialize;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
@@ -12,8 +14,8 @@ use limenet::contracts::{
     HeartbeatRequest, Ownership,
 };
 use limenet::state::{
-    BackoffAwakener, BatchError, BatchTaskInput, DependencyResolver, HeartbeatError, LeaseReaper,
-    SubmitError, SubmitRequest, TaskRepository,
+    BackoffAwakener, BatchError, BatchTaskInput, DependencyResolver, GraphTaskInsertError,
+    HeartbeatError, LeaseReaper, SubmitError, SubmitRequest, TaskRepository,
 };
 
 #[derive(Clone)]
@@ -22,6 +24,151 @@ struct AppState {
     instance_id: String,
     database_target: String,
     bind_address: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphTasksPayload {
+    tasks: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphInsertPayload {
+    anchor_task_id: String,
+    tasks: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct GraphNextPendingRequest {
+    #[serde(default)]
+    exclude_task_ids: Vec<String>,
+}
+
+async fn list_graph_tasks(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.list_graph_tasks().await {
+        Ok(tasks) => (StatusCode::OK, Json(json!({ "tasks": tasks }))).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_graph_task(
+    State(state): State<Arc<AppState>>,
+    Path(task_id): Path<String>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.get_graph_task(&task_id).await {
+        Ok(Some(task)) => (StatusCode::OK, Json(task)).into_response(),
+        Ok(None) => (StatusCode::OK, Json(json!({ "status": "not_found" }))).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn replace_graph_tasks(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<GraphTasksPayload>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.replace_graph_tasks(&payload.tasks).await {
+        Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn upsert_graph_task(
+    State(state): State<Arc<AppState>>,
+    Path(task_id): Path<String>,
+    Json(task): Json<Value>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.upsert_graph_task(&task_id, &task).await {
+        Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn insert_graph_tasks_after(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<GraphInsertPayload>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.insert_graph_tasks_after(&payload.anchor_task_id, &payload.tasks).await {
+        Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
+        Err(GraphTaskInsertError::UnknownAnchor(task_id)) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Unknown task: {task_id}") })),
+        )
+            .into_response(),
+        Err(GraphTaskInsertError::DuplicateTask(task_id)) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": format!("Task already exists: {task_id}") })),
+        )
+            .into_response(),
+        Err(GraphTaskInsertError::InvalidTaskPayload) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "graph task payload missing non-empty task_id" })),
+        )
+            .into_response(),
+        Err(GraphTaskInsertError::SqlxError(err)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn next_pending_graph_task(
+    State(state): State<Arc<AppState>>,
+    request: Option<Json<GraphNextPendingRequest>>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    let exclude_task_ids = request
+        .map(|Json(body)| body.exclude_task_ids)
+        .unwrap_or_default();
+    match repo.next_pending_graph_task(&exclude_task_ids).await {
+        Ok(Some(task)) => (StatusCode::OK, Json(json!({ "task": task }))).into_response(),
+        Ok(None) => (StatusCode::OK, Json(json!({}))).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn recover_graph_tasks(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.recover_in_progress_graph_tasks().await {
+        Ok(recovered_count) => (
+            StatusCode::OK,
+            Json(json!({ "recovered_count": recovered_count })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 async fn create_tasks_batch(
@@ -63,7 +210,7 @@ async fn claim_task(
 
 async fn heartbeat_task(
     State(state): State<Arc<AppState>>,
-    axum::extract::Path(task_id): axum::extract::Path<uuid::Uuid>,
+    Path(task_id): Path<uuid::Uuid>,
     Json(request): Json<HeartbeatRequest>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
@@ -81,7 +228,7 @@ async fn heartbeat_task(
 
 async fn submit_task(
     State(state): State<Arc<AppState>>,
-    axum::extract::Path(task_id): axum::extract::Path<uuid::Uuid>,
+    Path(task_id): Path<uuid::Uuid>,
     Json(request): Json<SubmitRequest>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
@@ -295,7 +442,9 @@ async fn ownership_ingest(
 /// resolving from the environment so the function stays pure and testable.
 fn resolve_bind_address(env_value: Option<&str>) -> String {
     env_value
-        .map(|s| s.to_string())
+    .map(|s| s.trim())
+    .filter(|s| !s.is_empty())
+    .map(|s| s.to_string())
         .unwrap_or_else(|| "0.0.0.0:3000".to_string())
 }
 
@@ -369,6 +518,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/health", get(health_handler))
+        .route("/api/v1/graph/tasks", get(list_graph_tasks).post(replace_graph_tasks))
+        .route("/api/v1/graph/tasks/insert", post(insert_graph_tasks_after))
+        .route("/api/v1/graph/tasks/next_pending", post(next_pending_graph_task))
+        .route("/api/v1/graph/tasks/recover", post(recover_graph_tasks))
+        .route("/api/v1/graph/tasks/{task_id}", get(get_graph_task).put(upsert_graph_task))
         .route("/api/v1/tasks/batch", post(create_tasks_batch))
         .route("/api/v1/tasks/claim", post(claim_task))
         .route("/api/v1/tasks/{task_id}/heartbeat", post(heartbeat_task))
@@ -1358,9 +1512,13 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_bind_address_empty_string_is_preserved() {
-        // Empty string is a caller error; the resolver does not validate.
-        assert_eq!(resolve_bind_address(Some("")), "");
+    fn test_resolve_bind_address_empty_string_falls_back_to_default() {
+        assert_eq!(resolve_bind_address(Some("")), "0.0.0.0:3000");
+    }
+
+    #[test]
+    fn test_resolve_bind_address_whitespace_only_falls_back_to_default() {
+        assert_eq!(resolve_bind_address(Some("   ")), "0.0.0.0:3000");
     }
 
     // -------------------------------------------------------------------
