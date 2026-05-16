@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project currently tracks an internal `0.x` release line.
 
+## [Unreleased]
+
+### Added
+
+- 支持通过 `LIMENET_BIND` 环境变量配置监听地址和端口，替代硬编码的 `0.0.0.0:3000`
+- 启动日志打印解析后的绑定地址
+- 新增 `resolve_bind_address` 单元测试，覆盖默认值与非默认配置
+- 文档补充同一台机器运行多个 LimeNet 实例的说明
+
 ## [0.1.0] - 2026-04-22
 
 ### Added

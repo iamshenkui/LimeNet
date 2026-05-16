@@ -18,7 +18,7 @@ sqlx migrate run
 cargo run
 ```
 
-服务默认监听 `0.0.0.0:3000`。
+服务默认监听 `0.0.0.0:3000`。通过设置环境变量 `LIMENET_BIND` 可以自定义地址和端口，从而在同一台机器上运行多个实例。详见 `docs/operations.md`。
 
 ## 参考
 

@@ -46,6 +46,36 @@ cargo run
 0.0.0.0:3000
 ```
 
+### 4. 修改监听地址或端口
+
+通过环境变量 `LIMENET_BIND` 可以自定义监听地址和端口：
+
+```bash
+export LIMENET_BIND=127.0.0.1:8080
+cargo run
+```
+
+启动日志会打印实际解析后的地址，例如：
+
+```text
+LimeNet task orchestrator starting on 127.0.0.1:8080...
+```
+
+### 5. 在同一台机器上运行多个实例
+
+每个 LimeNet 实例需要独立的 `LIMENET_BIND` 端口（以及独立的数据库或 schema）。示例如下：
+
+```bash
+# 实例 A —— 默认端口
+cargo run
+
+# 实例 B —— 指定不同端口
+LIMENET_BIND=0.0.0.0:3001 cargo run
+
+# 实例 C —— 仅监听本地回环
+LIMENET_BIND=127.0.0.1:3002 cargo run
+```
+
 ## 后台任务间隔
 
 - `DependencyResolver`: 每 2 秒扫描一次

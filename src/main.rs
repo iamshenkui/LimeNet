@@ -285,6 +285,16 @@ async fn ownership_ingest(
     ownership_ingest_logic(ownership)
 }
 
+/// Resolve the bind address from an explicit value or the default `0.0.0.0:3000`.
+///
+/// The caller should pass `std::env::var("LIMENET_BIND").ok().as_deref()` when
+/// resolving from the environment so the function stays pure and testable.
+fn resolve_bind_address(env_value: Option<&str>) -> String {
+    env_value
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "0.0.0.0:3000".to_string())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = std::env::var("DATABASE_URL")
@@ -322,8 +332,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/ownership/ingest", post(ownership_ingest))
         .with_state(state);
 
-    let listener = TcpListener::bind("0.0.0.0:3000").await?;
-    println!("LimeNet task orchestrator starting on 0.0.0.0:3000...");
+    let bind_addr = resolve_bind_address(std::env::var("LIMENET_BIND").ok().as_deref());
+    let listener = TcpListener::bind(&bind_addr).await?;
+    println!("LimeNet task orchestrator starting on {bind_addr}...");
 
     axum::serve(listener, app).await?;
 
@@ -1272,5 +1283,36 @@ mod tests {
                 "delivery_id mismatch for {case_name}"
             );
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Bind-address resolution tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_bind_address_defaults_to_0_0_0_0_3000() {
+        assert_eq!(resolve_bind_address(None), "0.0.0.0:3000");
+    }
+
+    #[test]
+    fn test_resolve_bind_address_uses_custom_port() {
+        assert_eq!(
+            resolve_bind_address(Some("127.0.0.1:8080")),
+            "127.0.0.1:8080"
+        );
+    }
+
+    #[test]
+    fn test_resolve_bind_address_uses_custom_host_and_port() {
+        assert_eq!(
+            resolve_bind_address(Some("192.168.1.10:9090")),
+            "192.168.1.10:9090"
+        );
+    }
+
+    #[test]
+    fn test_resolve_bind_address_empty_string_is_preserved() {
+        // Empty string is a caller error; the resolver does not validate.
+        assert_eq!(resolve_bind_address(Some("")), "");
     }
 }
