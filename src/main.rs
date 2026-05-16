@@ -2,7 +2,7 @@ pub mod config;
 pub mod contracts;
 pub mod state;
 
-use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
+use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::{get, post}};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
@@ -19,6 +19,9 @@ use limenet::state::{
 #[derive(Clone)]
 struct AppState {
     pool: sqlx::PgPool,
+    instance_id: String,
+    database_target: String,
+    bind_address: String,
 }
 
 async fn create_tasks_batch(
@@ -296,13 +299,46 @@ fn resolve_bind_address(env_value: Option<&str>) -> String {
         .unwrap_or_else(|| "0.0.0.0:3000".to_string())
 }
 
+/// Resolve the instance identity from an explicit value or the default `default`.
+///
+/// The caller should pass `std::env::var("LIMENET_INSTANCE_ID").ok().as_deref()` when
+/// resolving from the environment so the function stays pure and testable.
+/// Whitespace is trimmed and empty values fall back to the default so that
+/// accidental blank exports do not produce an unhelpful identity.
+fn resolve_instance_id(env_value: Option<&str>) -> String {
+    env_value
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "default".to_string())
+}
+
+/// Pure health-response logic, free of AppState / database dependencies.
+///
+/// Returns a minimal JSON payload that lets operators verify which LimeNet
+/// instance they are talking to without leaking sensitive configuration.
+pub fn health_response(instance_id: &str, database_target: &str, bind_address: &str) -> impl IntoResponse + use<> {
+    let response = serde_json::json!({
+        "status": "healthy",
+        "instance_id": instance_id,
+        "database_target": database_target,
+        "bind_address": bind_address,
+    });
+    (StatusCode::OK, Json(response))
+}
+
+async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    health_response(&state.instance_id, &state.database_target, &state.bind_address)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = limenet::config::resolve_database_url()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
-    let target = limenet::config::display_database_target(&database_url);
-    println!("LimeNet connecting to database {target}...");
+    let instance_id = resolve_instance_id(std::env::var("LIMENET_INSTANCE_ID").ok().as_deref());
+    let database_target = limenet::config::display_database_target(&database_url);
+    println!("LimeNet connecting to database {database_target}...");
 
     let pool = sqlx::PgPool::connect(&database_url).await?;
 
@@ -322,9 +358,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         awakener.run().await;
     });
 
-    let state = Arc::new(AppState { pool });
+    let bind_addr = resolve_bind_address(std::env::var("LIMENET_BIND").ok().as_deref());
+
+    let state = Arc::new(AppState {
+        pool,
+        instance_id,
+        database_target,
+        bind_address: bind_addr.clone(),
+    });
 
     let app = Router::new()
+        .route("/health", get(health_handler))
         .route("/api/v1/tasks/batch", post(create_tasks_batch))
         .route("/api/v1/tasks/claim", post(claim_task))
         .route("/api/v1/tasks/{task_id}/heartbeat", post(heartbeat_task))
@@ -336,7 +380,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/ownership/ingest", post(ownership_ingest))
         .with_state(state);
 
-    let bind_addr = resolve_bind_address(std::env::var("LIMENET_BIND").ok().as_deref());
     let listener = TcpListener::bind(&bind_addr).await?;
     println!("LimeNet task orchestrator starting on {bind_addr}...");
 
@@ -1318,5 +1361,82 @@ mod tests {
     fn test_resolve_bind_address_empty_string_is_preserved() {
         // Empty string is a caller error; the resolver does not validate.
         assert_eq!(resolve_bind_address(Some("")), "");
+    }
+
+    // -------------------------------------------------------------------
+    // Instance-identity resolution tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_instance_id_defaults_to_default() {
+        assert_eq!(resolve_instance_id(None), "default");
+    }
+
+    #[test]
+    fn test_resolve_instance_id_uses_custom_value() {
+        assert_eq!(
+            resolve_instance_id(Some("local-task")),
+            "local-task"
+        );
+    }
+
+    #[test]
+    fn test_resolve_instance_id_trims_whitespace() {
+        assert_eq!(
+            resolve_instance_id(Some("  shared-staging  ")),
+            "shared-staging"
+        );
+    }
+
+    #[test]
+    fn test_resolve_instance_id_empty_string_falls_back() {
+        assert_eq!(resolve_instance_id(Some("")), "default");
+    }
+
+    #[test]
+    fn test_resolve_instance_id_whitespace_only_falls_back() {
+        assert_eq!(resolve_instance_id(Some("   ")), "default");
+    }
+
+    // -------------------------------------------------------------------
+    // Health-response tests
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_health_response_returns_ok() {
+        let response = health_response("local-dev", "localhost:5432/limenet_local", "127.0.0.1:3000")
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_health_response_includes_identity_fields() {
+        let response = health_response("shared-staging", "db.example.com:5432/limenet_shared", "0.0.0.0:3001")
+            .into_response();
+        let body = body_to_json(response).await;
+        assert_eq!(body["status"], "healthy");
+        assert_eq!(body["instance_id"], "shared-staging");
+        assert_eq!(body["database_target"], "db.example.com:5432/limenet_shared");
+        assert_eq!(body["bind_address"], "0.0.0.0:3001");
+    }
+
+    #[tokio::test]
+    async fn test_health_response_does_not_leak_credentials() {
+        // database_target is already credential-stripped by config::display_database_target.
+        // The health endpoint merely echoes what it is given, so we verify it
+        // does not add any extra parsing that could expose secrets.
+        let response = health_response("default", "host:5432/db", "0.0.0.0:3000")
+            .into_response();
+        let body = body_to_json(response).await;
+        let json_str = serde_json::to_string(&body).unwrap();
+        assert!(
+            !json_str.contains("password"),
+            "health response must not contain raw credentials"
+        );
+        assert!(
+            !json_str.contains("secret"),
+            "health response must not contain raw credentials"
+        );
+        assert_eq!(body["database_target"], "host:5432/db");
     }
 }

@@ -101,6 +101,49 @@ cargo run
 - CI 测试用例污染生产数据
 - 多个实例竞争同一套任务表
 
+### 6. 配置实例身份标识
+
+通过环境变量 `LIMENET_INSTANCE_ID` 可以为每个 LimeNet 实例设置一个可读的身份标识，便于运维区分本地任务后端和共享实例：
+
+```bash
+# 本地开发实例
+export LIMENET_INSTANCE_ID=local-task
+export DATABASE_URL=postgres://chenhui@localhost:5432/limenet_local
+export LIMENET_BIND=127.0.0.1:3000
+cargo run
+```
+
+```bash
+# 共享 staging 实例
+export LIMENET_INSTANCE_ID=shared-staging
+export DATABASE_URL=postgres://chenhui@localhost:5432/limenet_shared
+export LIMENET_BIND=0.0.0.0:3001
+cargo run
+```
+
+如果不设置 `LIMENET_INSTANCE_ID`，默认值为 `"default"`。空白值会被自动回退到默认值，避免意外导出空字符串导致身份丢失。
+
+### 7. 验证当前连接的实例身份
+
+启动后访问 `/health` 端点即可确认当前实例的身份：
+
+```bash
+curl http://127.0.0.1:3000/health
+```
+
+示例输出：
+
+```json
+{
+  "status": "healthy",
+  "instance_id": "local-task",
+  "database_target": "localhost:5432/limenet_local",
+  "bind_address": "127.0.0.1:3000"
+}
+```
+
+运维人员应将 `/health` 作为连接后的第一个检查步骤，确保 `instance_id` 和 `database_target` 与预期一致，防止 meta-agent 或其他客户端指向错误的 LimeNet 实例。
+
 如果需要进一步隔离，也可以在同一个数据库中使用不同的 schema：
 
 ```bash
