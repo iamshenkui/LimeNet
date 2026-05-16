@@ -36,6 +36,112 @@ http://127.0.0.1:3000
 
 运维人员可以通过此端点区分本地任务后端和共享/全局 LimeNet 实例，避免将 meta-agent 指向错误的环境。
 
+## Meta-agent Graph Task Compatibility API
+
+以下接口服务于 `meta-agent` 的 `TaskGraphBackend` / `LocalLimeNetStateBackend` 兼容层。它们保存的是 meta-agent 的完整 task graph payload，使用字符串 `task_id`，并与 LimeNet 原生 UUID worker task API 分开存储。
+
+### `GET /api/v1/graph/tasks`
+
+按 `task_order ASC` 返回当前 meta-agent task graph。
+
+Response:
+
+```json
+{
+  "tasks": [
+    {
+      "task_id": "US-001",
+      "title": "Implement task backend",
+      "status": "pending",
+      "dependencies": []
+    }
+  ]
+}
+```
+
+### `POST /api/v1/graph/tasks`
+
+整体替换当前 meta-agent task graph。请求体形状与 `GET /api/v1/graph/tasks` 一致：
+
+```json
+{
+  "tasks": [
+    {
+      "task_id": "US-001",
+      "title": "Implement task backend",
+      "status": "pending",
+      "dependencies": []
+    }
+  ]
+}
+```
+
+### `GET /api/v1/graph/tasks/{task_id}`
+
+返回单个 meta-agent task payload。未找到时返回：
+
+```json
+{ "status": "not_found" }
+```
+
+### `PUT /api/v1/graph/tasks/{task_id}`
+
+插入或更新单个 meta-agent task payload。新任务会追加到当前 graph 末尾；已有任务保持原 `task_order`。
+
+### `POST /api/v1/graph/tasks/insert`
+
+在指定 task 后插入一组新任务。
+
+```json
+{
+  "anchor_task_id": "US-001",
+  "tasks": [
+    {
+      "task_id": "US-001-a",
+      "title": "Part A",
+      "status": "pending",
+      "dependencies": ["US-001"]
+    }
+  ]
+}
+```
+
+### `POST /api/v1/graph/tasks/next_pending`
+
+返回下一个可运行的 `pending` task。依赖项必须全部为 `complete`，排序规则为 priority 降序、原 graph 顺序升序。
+
+```json
+{
+  "exclude_task_ids": ["US-001"]
+}
+```
+
+Response:
+
+```json
+{
+  "task": {
+    "task_id": "US-002",
+    "title": "Next task",
+    "status": "pending"
+  }
+}
+```
+
+无可运行任务时返回空对象：
+
+```json
+{}
+```
+
+### `POST /api/v1/graph/tasks/recover`
+
+将所有 `in_progress` task 恢复为 `pending`。
+
+```json
+{ "recovered_count": 1 }
+```
+
 ## `POST /api/v1/tasks/batch`
 
 批量写入任务图。

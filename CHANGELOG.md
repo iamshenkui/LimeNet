@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-17
+
 ### Added
 
 - 支持通过 `LIMENET_BIND` 环境变量配置监听地址和端口，替代硬编码的 `0.0.0.0:3000`
@@ -17,11 +19,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - 文档更新：补充本地任务实例与共享任务实例使用独立 PostgreSQL 数据库的完整示例
 - 新增 `GET /health` 端点，暴露实例身份、数据库目标与绑定地址
 - 新增 `LIMENET_INSTANCE_ID` 环境变量，用于区分本地与共享 LimeNet 实例
+- 新增 meta-agent task graph compatibility API：`/api/v1/graph/tasks*`
+- 新增 `graph_tasks` 持久化表，用于保存 meta-agent 的字符串 task ID 与完整 JSON task payload
+- 新增 repo 级 `.meta-agent/config.yaml`，默认指向本地 Local LimeNet 验证实例
 
 ### Changed
 
 - `DATABASE_URL` 改为**必须显式设置**，移除静默回退到 `postgres://chenhui@localhost:5432/postgres` 的行为
 - 启动时打印脱敏后的数据库目标（`host:port/dbname`，不含凭据）
+- 数据库目标脱敏改为 URL parser 驱动，避免 malformed URL 泄漏凭据，并保留 `search_path` 等安全隔离上下文
+
+### Fixed
+
+- 修复空白 `LIMENET_BIND` 导致监听地址解析为空字符串的问题
+- 修复 `DATABASE_URL` 配置测试通过进程环境变量互相干扰的并发风险
 
 ## [0.1.0] - 2026-04-22
 
