@@ -1,3 +1,4 @@
+pub mod config;
 pub mod contracts;
 pub mod state;
 
@@ -297,8 +298,11 @@ fn resolve_bind_address(env_value: Option<&str>) -> String {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://chenhui@localhost:5432/postgres".to_string());
+    let database_url = limenet::config::resolve_database_url()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+    let target = limenet::config::display_database_target(&database_url);
+    println!("LimeNet connecting to database {target}...");
 
     let pool = sqlx::PgPool::connect(&database_url).await?;
 

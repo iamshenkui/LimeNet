@@ -889,8 +889,8 @@ mod tests {
     use crate::contracts::{Payload, TaskStatus};
 
     async fn test_pool() -> PgPool {
-        let database_url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://chenhui@localhost:5432/postgres".to_string());
+        let database_url = crate::config::resolve_database_url()
+            .expect("DATABASE_URL must be set for tests");
         PgPool::connect(&database_url)
             .await
             .expect("Failed to connect to database")

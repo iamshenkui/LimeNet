@@ -18,14 +18,23 @@
 
 确保本地有 PostgreSQL，并创建可访问的数据库。
 
+`DATABASE_URL` **必须显式设置**，不存在静默回退默认值。这样可以在同一台机器或同一集群中安全运行多个 LimeNet 实例，每个实例指向独立的数据库，避免误操作共享数据。
+
 ```bash
 export DATABASE_URL=postgres://<user>:<password>@localhost:5432/<db>
 ```
 
-如果未设置，当前代码会回退到：
+如果未设置，启动会立即失败并给出明确提示：
 
 ```text
-postgres://chenhui@localhost:5432/postgres
+DATABASE_URL is not set. Set it explicitly, e.g. DATABASE_URL=postgres://user@localhost:5432/limenet
+```
+
+启动日志会打印解析后的数据库目标（已脱敏，不含密码）：
+
+```text
+LimeNet connecting to database localhost:5432/limenet...
+LimeNet task orchestrator starting on 0.0.0.0:3000...
 ```
 
 ### 2. 执行迁移
@@ -63,17 +72,39 @@ LimeNet task orchestrator starting on 127.0.0.1:8080...
 
 ### 5. 在同一台机器上运行多个实例
 
-每个 LimeNet 实例需要独立的 `LIMENET_BIND` 端口（以及独立的数据库或 schema）。示例如下：
+每个 LimeNet 实例需要 **独立的 `DATABASE_URL` 数据库** 和独立的 `LIMENET_BIND` 端口，避免数据混用。
+
+推荐做法是为不同用途创建独立的数据库：
 
 ```bash
-# 实例 A —— 默认端口
+# 1) 在 PostgreSQL 中创建两个数据库
+psql -c "CREATE DATABASE limenet_local;"
+psql -c "CREATE DATABASE limenet_shared;"
+```
+
+```bash
+# 本地任务实例（本地开发、CI 测试）
+export DATABASE_URL=postgres://chenhui@localhost:5432/limenet_local
+export LIMENET_BIND=127.0.0.1:3000
 cargo run
+```
 
-# 实例 B —— 指定不同端口
-LIMENET_BIND=0.0.0.0:3001 cargo run
+```bash
+# 共享任务实例（团队共享的 staging / prod）
+export DATABASE_URL=postgres://chenhui@localhost:5432/limenet_shared
+export LIMENET_BIND=0.0.0.0:3001
+cargo run
+```
 
-# 实例 C —— 仅监听本地回环
-LIMENET_BIND=127.0.0.1:3002 cargo run
+显式设置 `DATABASE_URL` 能确保不会出现以下误操作：
+- 本地开发时不小心写入共享数据库
+- CI 测试用例污染生产数据
+- 多个实例竞争同一套任务表
+
+如果需要进一步隔离，也可以在同一个数据库中使用不同的 schema：
+
+```bash
+export DATABASE_URL=postgres://chenhui@localhost:5432/limenet?options=-csearch_path%3Dlocal_tasks
 ```
 
 ## 后台任务间隔
@@ -114,7 +145,7 @@ LIMENET_BIND=127.0.0.1:3002 cargo run
 - `capabilities` 已接收但暂未参与任务筛选
 - 若任务没有配置 `validation_script`，当前实现会停留在 `EVALUATING`
 - 依赖解锁当前主要依赖轮询，不是纯事件驱动
-- 配置项仍以代码内默认值为主，尚未完整环境变量化
+- 配置项已环境变量化（`DATABASE_URL`、`LIMENET_BIND`），其他参数仍以代码内默认值为主
 - 目前没有 Web UI、鉴权、分布式部署或隔离沙箱
 
 ## 文档维护建议
