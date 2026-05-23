@@ -19,6 +19,10 @@ opensandbox:
   domain_env: OPENSANDBOX_DOMAIN
   image: meta-agent-worker:latest
   image_env: OPENSANDBOX_IMAGE
+  base_ref: main
+  base_ref_env: OPENSANDBOX_BASE_REF
+  cpu_limit: 4000m
+  memory_limit: 8192Mi
   timeout_minutes: 30
 
 providers:
