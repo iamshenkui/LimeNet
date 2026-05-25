@@ -8,7 +8,7 @@ state_backend: local_limenet
 execution_backend: opensandbox
 
 limenet:
-  base_url: http://127.0.0.1:3100
+  base_url: http://127.0.0.1:3587
   base_url_env: LIMENET_BASE_URL
   instance_profile: local
 
@@ -23,7 +23,7 @@ opensandbox:
   base_ref_env: OPENSANDBOX_BASE_REF
   cpu_limit: 4000m
   memory_limit: 8192Mi
-  timeout_minutes: 30
+  timeout_minutes: 240
 
 providers:
   kimi:
@@ -70,7 +70,7 @@ model_profiles:
   kimi-k2-primary:
     provider: kimi
     model: kimi-for-coding
-    enabled: true
+    enabled: false
     capabilities:
       - code
       - long_context
@@ -132,6 +132,7 @@ model_profiles:
     latency_class: slow
     roles:
       - worker
+      - arbiter
       - prd_generator
       - skill_proposal
     priority: 110
@@ -210,12 +211,10 @@ roles:
     required_capabilities:
       - code
     candidates:
-      - profile: kimi-k2-primary
+      - profile: deepseek-pro-long
         priority: 1000
       - profile: deepseek-flash
-        priority: 120
-      - profile: deepseek-pro-long
-        priority: 110
+        priority: 140
       - profile: openrouter-gemini-vision-fast
         priority: 100
 
@@ -224,46 +223,40 @@ roles:
     required_capabilities:
       - code
     candidates:
-      - profile: kimi-k2-primary
+      - profile: deepseek-pro-long
         priority: 1000
       - profile: glm-5-1
-        priority: 100
+        priority: 120
       - profile: openrouter-glm-5-1
-        priority: 90
+        priority: 100
 
   prd_generator:
     mode: priority
     required_capabilities:
       - code
     candidates:
-      - profile: kimi-k2-primary
-        priority: 1000
       - profile: deepseek-pro-long
-        priority: 110
+        priority: 1000
       - profile: glm-5-1
-        priority: 100
+        priority: 120
       - profile: openrouter-glm-5-1
-        priority: 90
+        priority: 100
 
   retrospective_cheap:
     mode: priority
     required_capabilities:
       - code
     candidates:
-      - profile: kimi-k2-primary
-        priority: 1000
       - profile: deepseek-flash
-        priority: 120
+        priority: 1000
 
   skill_proposal:
     mode: priority
     required_capabilities:
       - code
     candidates:
-      - profile: kimi-k2-primary
-        priority: 1000
       - profile: deepseek-pro-long
-        priority: 110
+        priority: 1000
       - profile: glm-5-1
         priority: 100
       - profile: openrouter-glm-5-1
