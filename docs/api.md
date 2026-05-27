@@ -54,14 +54,22 @@ Response:
 {
   "tasks": [
     {
+      "graph_id": "default",
       "task_id": "US-001",
-      "title": "Implement task backend",
-      "status": "pending",
-      "dependencies": []
+      "task_order": 0,
+      "task_data": {
+        "title": "Implement task backend",
+        "status": "pending",
+        "dependencies": []
+      },
+      "hash_algorithm": "sha-256",
+      "state_hash": "a1b2c3d4..."
     }
   ]
 }
 ```
+
+每个任务对象包含 `hash_algorithm`（固定为 `"sha-256"`）和 `state_hash`（64 位小写十六进制字符串），客户端可用它们验证读取到的任务状态是否与写入时一致。`state_hash` 基于 `graph_id`、`task_id`、`task_order` 和规范化后的 `task_data` 计算，不包含易变的审计字段。
 
 ### `POST /api/v1/graph/tasks`
 
@@ -88,11 +96,28 @@ Query 参数：
 
 ### `GET /api/v1/graph/tasks/{task_id}`
 
-返回单个 meta-agent task payload。
+返回单个 meta-agent task state，包含完整性哈希字段。
 
 Query 参数：
 
 - `graph_id`（可选）：目标 graph 标识符，默认值为 `"default"`
+
+找到时返回：
+
+```json
+{
+  "graph_id": "default",
+  "task_id": "US-001",
+  "task_order": 0,
+  "task_data": {
+    "title": "Implement task backend",
+    "status": "pending",
+    "dependencies": []
+  },
+  "hash_algorithm": "sha-256",
+  "state_hash": "a1b2c3d4..."
+}
+```
 
 未找到时返回：
 
@@ -143,9 +168,15 @@ Response:
 ```json
 {
   "task": {
+    "graph_id": "default",
     "task_id": "US-002",
-    "title": "Next task",
-    "status": "pending"
+    "task_order": 1,
+    "task_data": {
+      "title": "Next task",
+      "status": "pending"
+    },
+    "hash_algorithm": "sha-256",
+    "state_hash": "e5f6g7h8..."
   }
 }
 ```
