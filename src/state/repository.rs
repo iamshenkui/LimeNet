@@ -1,4 +1,5 @@
 use crate::contracts::{Lease, Payload, RetryLogic, Task, TaskRow, TaskStatus};
+use crate::state::hash::compute_graph_task_hash;
 use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::Value;
 use serde::{Deserialize, Serialize};
@@ -280,6 +281,52 @@ impl<'a> TaskRepository<'a> {
         Ok(row.map(|(task_data,)| task_data))
     }
 
+    /// Return graph task states enriched with stable integrity hashes.
+    pub async fn list_graph_task_states(&self) -> sqlx::Result<Vec<Value>> {
+        let rows: Vec<(String, String, i32, Value)> = sqlx::query_as(
+            "SELECT graph_id, task_id, task_order, task_data FROM graph_tasks ORDER BY task_order ASC"
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(graph_id, task_id, task_order, task_data)| {
+                let (hash_algorithm, state_hash) =
+                    compute_graph_task_hash(&graph_id, &task_id, task_order, &task_data);
+                serde_json::json!({
+                    "graph_id": graph_id,
+                    "task_id": task_id,
+                    "task_order": task_order,
+                    "task_data": task_data,
+                    "hash_algorithm": hash_algorithm,
+                    "state_hash": state_hash,
+                })
+            })
+            .collect())
+    }
+
+    /// Return a single graph task state enriched with a stable integrity hash.
+    pub async fn get_graph_task_state(&self, task_id: &str) -> sqlx::Result<Option<Value>> {
+        let row: Option<(String, String, i32, Value)> = sqlx::query_as(
+            "SELECT graph_id, task_id, task_order, task_data FROM graph_tasks WHERE task_id = $1"
+        )
+        .bind(task_id)
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row.map(|(graph_id, task_id, task_order, task_data)| {
+            let (hash_algorithm, state_hash) =
+                compute_graph_task_hash(&graph_id, &task_id, task_order, &task_data);
+            serde_json::json!({
+                "graph_id": graph_id,
+                "task_id": task_id,
+                "task_order": task_order,
+                "task_data": task_data,
+                "hash_algorithm": hash_algorithm,
+                "state_hash": state_hash,
+            })
+        }))
+    }
+
     pub async fn replace_graph_tasks(&self, tasks: &[Value]) -> sqlx::Result<()> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM graph_tasks").execute(&mut *tx).await?;
@@ -288,13 +335,15 @@ impl<'a> TaskRepository<'a> {
             let task_id = graph_task_id(task).ok_or_else(|| {
                 sqlx::Error::Protocol("graph task payload missing non-empty task_id".into())
             })?;
+            let graph_id = graph_task_graph_id(task);
             sqlx::query(
                 r#"
-                INSERT INTO graph_tasks (task_id, task_order, task_data)
-                VALUES ($1, $2, $3)
+                INSERT INTO graph_tasks (task_id, graph_id, task_order, task_data)
+                VALUES ($1, $2, $3, $4)
                 "#,
             )
             .bind(task_id)
+            .bind(graph_id)
             .bind(index as i32)
             .bind(task)
             .execute(&mut *tx)
@@ -325,15 +374,18 @@ impl<'a> TaskRepository<'a> {
             }
         };
 
+        let graph_id = graph_task_graph_id(task);
+
         sqlx::query(
             r#"
-            INSERT INTO graph_tasks (task_id, task_order, task_data)
-            VALUES ($1, $2, $3)
+            INSERT INTO graph_tasks (task_id, graph_id, task_order, task_data)
+            VALUES ($1, $2, $3, $4)
             ON CONFLICT (task_id)
-            DO UPDATE SET task_data = EXCLUDED.task_data
+            DO UPDATE SET graph_id = EXCLUDED.graph_id, task_data = EXCLUDED.task_data
             "#,
         )
         .bind(task_id)
+        .bind(graph_id)
         .bind(task_order)
         .bind(task)
         .execute(self.pool)
@@ -387,13 +439,15 @@ impl<'a> TaskRepository<'a> {
 
         for (index, task) in tasks.iter().enumerate() {
             let task_id = graph_task_id(task).ok_or(GraphTaskInsertError::InvalidTaskPayload)?;
+            let graph_id = graph_task_graph_id(task);
             sqlx::query(
                 r#"
-                INSERT INTO graph_tasks (task_id, task_order, task_data)
-                VALUES ($1, $2, $3)
+                INSERT INTO graph_tasks (task_id, graph_id, task_order, task_data)
+                VALUES ($1, $2, $3, $4)
                 "#,
             )
             .bind(task_id)
+            .bind(graph_id)
             .bind(anchor_order + 1 + index as i32)
             .bind(task)
             .execute(&mut *tx)
@@ -408,38 +462,53 @@ impl<'a> TaskRepository<'a> {
         &self,
         exclude_task_ids: &[String],
     ) -> sqlx::Result<Option<Value>> {
-        let tasks = self.list_graph_tasks().await?;
+        let rows: Vec<(String, String, i32, Value)> = sqlx::query_as(
+            "SELECT graph_id, task_id, task_order, task_data FROM graph_tasks ORDER BY task_order ASC"
+        )
+        .fetch_all(self.pool)
+        .await?;
+
         let excluded: HashSet<&str> = exclude_task_ids.iter().map(String::as_str).collect();
-        let completed_ids: HashSet<String> = tasks
+        let completed_ids: HashSet<String> = rows
             .iter()
-            .filter(|task| graph_task_status(task).as_deref() == Some("complete"))
-            .filter_map(graph_task_id)
+            .filter(|(_, _, _, task_data)| graph_task_status(task_data).as_deref() == Some("complete"))
+            .filter_map(|(_, task_id, _, _)| Some(task_id.clone()))
             .collect();
 
-        let mut candidates: Vec<(usize, i64, Value)> = tasks
+        let mut candidates: Vec<(usize, i64, String, String, i32, Value)> = rows
             .into_iter()
             .enumerate()
-            .filter_map(|(index, task)| {
-                let task_id = graph_task_id(&task)?;
-                if graph_task_status(&task).as_deref() != Some("pending") {
+            .filter_map(|(index, (graph_id, task_id, task_order, task_data))| {
+                if graph_task_status(&task_data).as_deref() != Some("pending") {
                     return None;
                 }
                 if excluded.contains(task_id.as_str()) {
                     return None;
                 }
-                let dependencies = graph_task_dependencies(&task);
+                let dependencies = graph_task_dependencies(&task_data);
                 if !dependencies.iter().all(|dep| completed_ids.contains(dep)) {
                     return None;
                 }
-                Some((index, graph_task_priority(&task), task))
+                Some((index, graph_task_priority(&task_data), graph_id, task_id, task_order, task_data))
             })
             .collect();
 
-        candidates.sort_by(|(index_a, priority_a, _), (index_b, priority_b, _)| {
+        candidates.sort_by(|(index_a, priority_a, _, _, _, _), (index_b, priority_b, _, _, _, _)| {
             priority_b.cmp(priority_a).then(index_a.cmp(index_b))
         });
 
-        Ok(candidates.into_iter().next().map(|(_, _, task)| task))
+        Ok(candidates.into_iter().next().map(|(_, _, graph_id, task_id, task_order, task_data)| {
+            let (hash_algorithm, state_hash) =
+                compute_graph_task_hash(&graph_id, &task_id, task_order, &task_data);
+            serde_json::json!({
+                "graph_id": graph_id,
+                "task_id": task_id,
+                "task_order": task_order,
+                "task_data": task_data,
+                "hash_algorithm": hash_algorithm,
+                "state_hash": state_hash,
+            })
+        }))
     }
 
     pub async fn recover_in_progress_graph_tasks(&self) -> sqlx::Result<i64> {
@@ -943,6 +1012,13 @@ fn graph_task_dependencies(task: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn graph_task_graph_id(task: &Value) -> String {
+    task.get("graph_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| "default".to_string())
 }
 
 pub struct DependencyResolver {
@@ -1455,5 +1531,146 @@ mod tests {
         assert!(matches!(result, Err(HeartbeatError::AgentMismatch)));
 
         repo.delete(task.task_id).await.unwrap();
+    }
+
+    // -------------------------------------------------------------------
+    // Graph task state integrity hash tests
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_graph_task_state_includes_hash_fields() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let task_id = "hash-test-001";
+        let task = serde_json::json!({
+            "task_id": task_id,
+            "graph_id": "g-hash",
+            "status": "pending",
+            "priority": 100,
+        });
+
+        repo.replace_graph_tasks(&[serde_json::json!(task)]).await.unwrap();
+
+        let state = repo.get_graph_task_state(task_id).await.unwrap().unwrap();
+        assert_eq!(state["graph_id"], "g-hash");
+        assert_eq!(state["task_id"], task_id);
+        assert_eq!(state["hash_algorithm"], "sha-256");
+        assert!(
+            state["state_hash"].as_str().unwrap().len() == 64,
+            "state_hash must be 64 hex chars"
+        );
+
+        sqlx::query("DELETE FROM graph_tasks WHERE task_id = $1")
+            .bind(task_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_graph_task_hash_stable_across_repeated_reads() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let task_id = "hash-stable-001";
+        let task = serde_json::json!({
+            "task_id": task_id,
+            "graph_id": "g-stable",
+            "status": "pending",
+        });
+
+        repo.replace_graph_tasks(&[serde_json::json!(task)]).await.unwrap();
+
+        let state1 = repo.get_graph_task_state(task_id).await.unwrap().unwrap();
+        let state2 = repo.get_graph_task_state(task_id).await.unwrap().unwrap();
+
+        assert_eq!(state1["state_hash"], state2["state_hash"]);
+        assert_eq!(state1["hash_algorithm"], state2["hash_algorithm"]);
+
+        sqlx::query("DELETE FROM graph_tasks WHERE task_id = $1")
+            .bind(task_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_graph_task_hash_stable_across_writes_and_reloads() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let task_id = "hash-reload-001";
+        let task = serde_json::json!({
+            "task_id": task_id,
+            "graph_id": "g-reload",
+            "status": "pending",
+            "dependencies": ["dep-1"],
+        });
+
+        // Initial write
+        repo.replace_graph_tasks(&[serde_json::json!(task.clone())]).await.unwrap();
+        let state1 = repo.get_graph_task_state(task_id).await.unwrap().unwrap();
+        let hash1 = state1["state_hash"].as_str().unwrap().to_string();
+
+        // Upsert with identical logical payload
+        repo.upsert_graph_task(task_id, &task).await.unwrap();
+        let state2 = repo.get_graph_task_state(task_id).await.unwrap().unwrap();
+        let hash2 = state2["state_hash"].as_str().unwrap().to_string();
+
+        assert_eq!(hash1, hash2, "identical payload must produce identical hash after upsert");
+
+        // Upsert with changed payload
+        let changed_task = serde_json::json!({
+            "task_id": task_id,
+            "graph_id": "g-reload",
+            "status": "complete",
+            "dependencies": ["dep-1"],
+        });
+        repo.upsert_graph_task(task_id, &changed_task).await.unwrap();
+        let state3 = repo.get_graph_task_state(task_id).await.unwrap().unwrap();
+        let hash3 = state3["state_hash"].as_str().unwrap().to_string();
+
+        assert_ne!(hash1, hash3, "changed payload must produce different hash");
+
+        sqlx::query("DELETE FROM graph_tasks WHERE task_id = $1")
+            .bind(task_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_graph_task_list_states_returns_hashes() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let tasks = vec![
+            serde_json::json!({"task_id": "list-001", "graph_id": "g-list", "status": "pending"}),
+            serde_json::json!({"task_id": "list-002", "graph_id": "g-list", "status": "pending"}),
+        ];
+
+        repo.replace_graph_tasks(&tasks).await.unwrap();
+
+        let states = repo.list_graph_task_states().await.unwrap();
+        assert_eq!(states.len(), 2);
+
+        for state in &states {
+            assert_eq!(state["hash_algorithm"], "sha-256");
+            assert!(
+                state["state_hash"].as_str().unwrap().len() == 64,
+                "every listed task must have a 64-char state_hash"
+            );
+        }
+
+        // Different task states must produce different hashes
+        let hash_001 = states[0]["state_hash"].as_str().unwrap();
+        let hash_002 = states[1]["state_hash"].as_str().unwrap();
+        assert_ne!(hash_001, hash_002);
+
+        sqlx::query("DELETE FROM graph_tasks WHERE graph_id = 'g-list'")
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }

@@ -47,7 +47,7 @@ async fn list_graph_tasks(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.list_graph_tasks().await {
+    match repo.list_graph_task_states().await {
         Ok(tasks) => (StatusCode::OK, Json(json!({ "tasks": tasks }))).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -62,7 +62,7 @@ async fn get_graph_task(
     Path(task_id): Path<String>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.get_graph_task(&task_id).await {
+    match repo.get_graph_task_state(&task_id).await {
         Ok(Some(task)) => (StatusCode::OK, Json(task)).into_response(),
         Ok(None) => (StatusCode::OK, Json(json!({ "status": "not_found" }))).into_response(),
         Err(err) => (
