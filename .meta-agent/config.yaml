@@ -70,7 +70,7 @@ model_profiles:
   kimi-k2-primary:
     provider: kimi
     model: kimi-for-coding
-    enabled: false
+    enabled: true
     capabilities:
       - code
       - long_context
@@ -211,10 +211,12 @@ roles:
     required_capabilities:
       - code
     candidates:
-      - profile: deepseek-pro-long
+      - profile: kimi-k2-primary
         priority: 1000
       - profile: deepseek-flash
-        priority: 140
+        priority: 120
+      - profile: deepseek-pro-long
+        priority: 110
       - profile: openrouter-gemini-vision-fast
         priority: 100
 
@@ -223,24 +225,24 @@ roles:
     required_capabilities:
       - code
     candidates:
-      - profile: deepseek-pro-long
+      - profile: kimi-k2-primary
         priority: 1000
       - profile: glm-5-1
-        priority: 120
-      - profile: openrouter-glm-5-1
         priority: 100
+      - profile: openrouter-glm-5-1
+        priority: 90
 
   prd_generator:
     mode: priority
     required_capabilities:
       - code
     candidates:
-      - profile: deepseek-pro-long
+      - profile: kimi-k2-primary
         priority: 1000
       - profile: glm-5-1
-        priority: 120
-      - profile: openrouter-glm-5-1
         priority: 100
+      - profile: openrouter-glm-5-1
+        priority: 90
 
   retrospective_cheap:
     mode: priority
@@ -255,7 +257,7 @@ roles:
     required_capabilities:
       - code
     candidates:
-      - profile: deepseek-pro-long
+      - profile: kimi-k2-primary
         priority: 1000
       - profile: glm-5-1
         priority: 100
