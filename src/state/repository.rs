@@ -264,17 +264,22 @@ impl<'a> TaskRepository<'a> {
 
     pub async fn list_graph_tasks(&self) -> sqlx::Result<Vec<Value>> {
         let rows: Vec<(Value,)> = sqlx::query_as(
-            "SELECT task_data FROM graph_tasks ORDER BY task_order ASC"
+            "SELECT task_data FROM graph_tasks ORDER BY graph_id ASC, task_order ASC"
         )
         .fetch_all(self.pool)
         .await?;
         Ok(rows.into_iter().map(|(task_data,)| task_data).collect())
     }
 
-    pub async fn get_graph_task(&self, task_id: &str) -> sqlx::Result<Option<Value>> {
+    pub async fn get_graph_task(
+        &self,
+        graph_id: &str,
+        task_id: &str,
+    ) -> sqlx::Result<Option<Value>> {
         let row: Option<(Value,)> = sqlx::query_as(
-            "SELECT task_data FROM graph_tasks WHERE task_id = $1"
+            "SELECT task_data FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
         )
+        .bind(graph_id)
         .bind(task_id)
         .fetch_optional(self.pool)
         .await?;
@@ -284,7 +289,7 @@ impl<'a> TaskRepository<'a> {
     /// Return graph task states enriched with stable integrity hashes.
     pub async fn list_graph_task_states(&self) -> sqlx::Result<Vec<Value>> {
         let rows: Vec<(String, String, i32, Value)> = sqlx::query_as(
-            "SELECT graph_id, task_id, task_order, task_data FROM graph_tasks ORDER BY task_order ASC"
+            "SELECT graph_id, task_id, task_order, task_data FROM graph_tasks ORDER BY graph_id ASC, task_order ASC"
         )
         .fetch_all(self.pool)
         .await?;
@@ -306,10 +311,15 @@ impl<'a> TaskRepository<'a> {
     }
 
     /// Return a single graph task state enriched with a stable integrity hash.
-    pub async fn get_graph_task_state(&self, task_id: &str) -> sqlx::Result<Option<Value>> {
+    pub async fn get_graph_task_state(
+        &self,
+        graph_id: &str,
+        task_id: &str,
+    ) -> sqlx::Result<Option<Value>> {
         let row: Option<(String, String, i32, Value)> = sqlx::query_as(
-            "SELECT graph_id, task_id, task_order, task_data FROM graph_tasks WHERE task_id = $1"
+            "SELECT graph_id, task_id, task_order, task_data FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
         )
+        .bind(graph_id)
         .bind(task_id)
         .fetch_optional(self.pool)
         .await?;
@@ -338,12 +348,12 @@ impl<'a> TaskRepository<'a> {
             let graph_id = graph_task_graph_id(task);
             sqlx::query(
                 r#"
-                INSERT INTO graph_tasks (task_id, graph_id, task_order, task_data)
+                INSERT INTO graph_tasks (graph_id, task_id, task_order, task_data)
                 VALUES ($1, $2, $3, $4)
                 "#,
             )
-            .bind(task_id)
-            .bind(graph_id)
+            .bind(&graph_id)
+            .bind(&task_id)
             .bind(index as i32)
             .bind(task)
             .execute(&mut *tx)
@@ -354,10 +364,16 @@ impl<'a> TaskRepository<'a> {
         Ok(())
     }
 
-    pub async fn upsert_graph_task(&self, task_id: &str, task: &Value) -> sqlx::Result<()> {
+    pub async fn upsert_graph_task(
+        &self,
+        graph_id: &str,
+        task_id: &str,
+        task: &Value,
+    ) -> sqlx::Result<()> {
         let existing_order: Option<(i32,)> = sqlx::query_as(
-            "SELECT task_order FROM graph_tasks WHERE task_id = $1"
+            "SELECT task_order FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
         )
+        .bind(graph_id)
         .bind(task_id)
         .fetch_optional(self.pool)
         .await?;
@@ -366,26 +382,25 @@ impl<'a> TaskRepository<'a> {
             Some((order,)) => order,
             None => {
                 let next_order: (Option<i32>,) = sqlx::query_as(
-                    "SELECT MAX(task_order) FROM graph_tasks"
+                    "SELECT MAX(task_order) FROM graph_tasks WHERE graph_id = $1"
                 )
+                .bind(graph_id)
                 .fetch_one(self.pool)
                 .await?;
                 next_order.0.unwrap_or(-1) + 1
             }
         };
 
-        let graph_id = graph_task_graph_id(task);
-
         sqlx::query(
             r#"
-            INSERT INTO graph_tasks (task_id, graph_id, task_order, task_data)
+            INSERT INTO graph_tasks (graph_id, task_id, task_order, task_data)
             VALUES ($1, $2, $3, $4)
-            ON CONFLICT (task_id)
-            DO UPDATE SET graph_id = EXCLUDED.graph_id, task_data = EXCLUDED.task_data
+            ON CONFLICT (graph_id, task_id)
+            DO UPDATE SET task_data = EXCLUDED.task_data
             "#,
         )
-        .bind(task_id)
         .bind(graph_id)
+        .bind(task_id)
         .bind(task_order)
         .bind(task)
         .execute(self.pool)
@@ -395,14 +410,16 @@ impl<'a> TaskRepository<'a> {
 
     pub async fn insert_graph_tasks_after(
         &self,
+        graph_id: &str,
         anchor_task_id: &str,
         tasks: &[Value],
     ) -> Result<(), GraphTaskInsertError> {
         let mut tx = self.pool.begin().await?;
 
         let anchor_row: Option<(i32,)> = sqlx::query_as(
-            "SELECT task_order FROM graph_tasks WHERE task_id = $1"
+            "SELECT task_order FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
         )
+        .bind(graph_id)
         .bind(anchor_task_id)
         .fetch_optional(&mut *tx)
         .await?;
@@ -418,8 +435,9 @@ impl<'a> TaskRepository<'a> {
             };
 
             let exists: Option<(String,)> = sqlx::query_as(
-                "SELECT task_id FROM graph_tasks WHERE task_id = $1"
+                "SELECT task_id FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
             )
+            .bind(graph_id)
             .bind(&task_id)
             .fetch_optional(&mut *tx)
             .await?;
@@ -430,24 +448,24 @@ impl<'a> TaskRepository<'a> {
         }
 
         sqlx::query(
-            "UPDATE graph_tasks SET task_order = task_order + $1 WHERE task_order > $2"
+            "UPDATE graph_tasks SET task_order = task_order + $1 WHERE graph_id = $2 AND task_order > $3"
         )
         .bind(tasks.len() as i32)
+        .bind(graph_id)
         .bind(anchor_order)
         .execute(&mut *tx)
         .await?;
 
         for (index, task) in tasks.iter().enumerate() {
             let task_id = graph_task_id(task).ok_or(GraphTaskInsertError::InvalidTaskPayload)?;
-            let graph_id = graph_task_graph_id(task);
             sqlx::query(
                 r#"
-                INSERT INTO graph_tasks (task_id, graph_id, task_order, task_data)
+                INSERT INTO graph_tasks (graph_id, task_id, task_order, task_data)
                 VALUES ($1, $2, $3, $4)
                 "#,
             )
-            .bind(task_id)
             .bind(graph_id)
+            .bind(task_id)
             .bind(anchor_order + 1 + index as i32)
             .bind(task)
             .execute(&mut *tx)
@@ -463,17 +481,21 @@ impl<'a> TaskRepository<'a> {
         exclude_task_ids: &[String],
     ) -> sqlx::Result<Option<Value>> {
         let rows: Vec<(String, String, i32, Value)> = sqlx::query_as(
-            "SELECT graph_id, task_id, task_order, task_data FROM graph_tasks ORDER BY task_order ASC"
+            "SELECT graph_id, task_id, task_order, task_data FROM graph_tasks ORDER BY graph_id ASC, task_order ASC"
         )
         .fetch_all(self.pool)
         .await?;
 
         let excluded: HashSet<&str> = exclude_task_ids.iter().map(String::as_str).collect();
-        let completed_ids: HashSet<String> = rows
+
+        // Build a per-graph set of completed task ids so dependencies are scoped by graph
+        let completed_by_graph: HashMap<String, HashSet<String>> = rows
             .iter()
             .filter(|(_, _, _, task_data)| graph_task_status(task_data).as_deref() == Some("complete"))
-            .filter_map(|(_, task_id, _, _)| Some(task_id.clone()))
-            .collect();
+            .fold(HashMap::new(), |mut acc, (graph_id, task_id, _, _)| {
+                acc.entry(graph_id.clone()).or_default().insert(task_id.clone());
+                acc
+            });
 
         let mut candidates: Vec<(usize, i64, String, String, i32, Value)> = rows
             .into_iter()
@@ -486,7 +508,9 @@ impl<'a> TaskRepository<'a> {
                     return None;
                 }
                 let dependencies = graph_task_dependencies(&task_data);
-                if !dependencies.iter().all(|dep| completed_ids.contains(dep)) {
+                if !dependencies.iter().all(|dep| {
+                    completed_by_graph.get(&graph_id).map_or(false, |set| set.contains(dep))
+                }) {
                     return None;
                 }
                 Some((index, graph_task_priority(&task_data), graph_id, task_id, task_order, task_data))
@@ -526,11 +550,13 @@ impl<'a> TaskRepository<'a> {
             let task_id = graph_task_id(&task).ok_or_else(|| {
                 sqlx::Error::Protocol("graph task payload missing non-empty task_id".into())
             })?;
+            let graph_id = graph_task_graph_id(&task);
             sqlx::query(
-                "UPDATE graph_tasks SET task_data = $1 WHERE task_id = $2"
+                "UPDATE graph_tasks SET task_data = $1 WHERE graph_id = $2 AND task_id = $3"
             )
             .bind(&task)
-            .bind(task_id)
+            .bind(&graph_id)
+            .bind(&task_id)
             .execute(&mut *tx)
             .await?;
             recovered += 1;
@@ -1552,7 +1578,7 @@ mod tests {
 
         repo.replace_graph_tasks(&[serde_json::json!(task)]).await.unwrap();
 
-        let state = repo.get_graph_task_state(task_id).await.unwrap().unwrap();
+        let state = repo.get_graph_task_state("g-hash", task_id).await.unwrap().unwrap();
         assert_eq!(state["graph_id"], "g-hash");
         assert_eq!(state["task_id"], task_id);
         assert_eq!(state["hash_algorithm"], "sha-256");
@@ -1582,8 +1608,8 @@ mod tests {
 
         repo.replace_graph_tasks(&[serde_json::json!(task)]).await.unwrap();
 
-        let state1 = repo.get_graph_task_state(task_id).await.unwrap().unwrap();
-        let state2 = repo.get_graph_task_state(task_id).await.unwrap().unwrap();
+        let state1 = repo.get_graph_task_state("g-stable", task_id).await.unwrap().unwrap();
+        let state2 = repo.get_graph_task_state("g-stable", task_id).await.unwrap().unwrap();
 
         assert_eq!(state1["state_hash"], state2["state_hash"]);
         assert_eq!(state1["hash_algorithm"], state2["hash_algorithm"]);
@@ -1610,12 +1636,12 @@ mod tests {
 
         // Initial write
         repo.replace_graph_tasks(&[serde_json::json!(task.clone())]).await.unwrap();
-        let state1 = repo.get_graph_task_state(task_id).await.unwrap().unwrap();
+        let state1 = repo.get_graph_task_state("g-reload", task_id).await.unwrap().unwrap();
         let hash1 = state1["state_hash"].as_str().unwrap().to_string();
 
         // Upsert with identical logical payload
-        repo.upsert_graph_task(task_id, &task).await.unwrap();
-        let state2 = repo.get_graph_task_state(task_id).await.unwrap().unwrap();
+        repo.upsert_graph_task("g-reload", task_id, &task).await.unwrap();
+        let state2 = repo.get_graph_task_state("g-reload", task_id).await.unwrap().unwrap();
         let hash2 = state2["state_hash"].as_str().unwrap().to_string();
 
         assert_eq!(hash1, hash2, "identical payload must produce identical hash after upsert");
@@ -1627,8 +1653,8 @@ mod tests {
             "status": "complete",
             "dependencies": ["dep-1"],
         });
-        repo.upsert_graph_task(task_id, &changed_task).await.unwrap();
-        let state3 = repo.get_graph_task_state(task_id).await.unwrap().unwrap();
+        repo.upsert_graph_task("g-reload", task_id, &changed_task).await.unwrap();
+        let state3 = repo.get_graph_task_state("g-reload", task_id).await.unwrap().unwrap();
         let hash3 = state3["state_hash"].as_str().unwrap().to_string();
 
         assert_ne!(hash1, hash3, "changed payload must produce different hash");
@@ -1669,6 +1695,293 @@ mod tests {
         assert_ne!(hash_001, hash_002);
 
         sqlx::query("DELETE FROM graph_tasks WHERE graph_id = 'g-list'")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    // -------------------------------------------------------------------
+    // Graph-scoped identity coexistence tests
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_same_task_id_coexists_under_different_graph_ids() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let shared_task_id = "shared-task-001";
+        let task_g1 = serde_json::json!({
+            "task_id": shared_task_id,
+            "graph_id": "g-alpha",
+            "status": "pending",
+        });
+        let task_g2 = serde_json::json!({
+            "task_id": shared_task_id,
+            "graph_id": "g-beta",
+            "status": "complete",
+        });
+
+        repo.upsert_graph_task("g-alpha", shared_task_id, &task_g1).await.unwrap();
+        repo.upsert_graph_task("g-beta", shared_task_id, &task_g2).await.unwrap();
+
+        let fetched_g1 = repo.get_graph_task("g-alpha", shared_task_id).await.unwrap();
+        let fetched_g2 = repo.get_graph_task("g-beta", shared_task_id).await.unwrap();
+
+        assert!(fetched_g1.is_some(), "task must exist in g-alpha");
+        assert!(fetched_g2.is_some(), "task must exist in g-beta");
+        assert_eq!(fetched_g1.unwrap()["status"], "pending");
+        assert_eq!(fetched_g2.unwrap()["status"], "complete");
+
+        sqlx::query("DELETE FROM graph_tasks WHERE graph_id IN ('g-alpha', 'g-beta')")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_graph_scoped_ordering_allows_same_task_order_across_graphs() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let tasks_g1 = vec![
+            serde_json::json!({"task_id": "order-001", "graph_id": "g-order-1", "status": "pending"}),
+            serde_json::json!({"task_id": "order-002", "graph_id": "g-order-1", "status": "pending"}),
+        ];
+        let tasks_g2 = vec![
+            serde_json::json!({"task_id": "order-001", "graph_id": "g-order-2", "status": "complete"}),
+            serde_json::json!({"task_id": "order-002", "graph_id": "g-order-2", "status": "complete"}),
+        ];
+
+        repo.replace_graph_tasks(&tasks_g1).await.unwrap();
+        repo.replace_graph_tasks(&tasks_g2).await.unwrap();
+
+        let states = repo.list_graph_task_states().await.unwrap();
+        let g1_states: Vec<_> = states.iter().filter(|s| s["graph_id"] == "g-order-1").collect();
+        let g2_states: Vec<_> = states.iter().filter(|s| s["graph_id"] == "g-order-2").collect();
+
+        assert_eq!(g1_states.len(), 2);
+        assert_eq!(g2_states.len(), 2);
+
+        // task_order 0 and 1 should exist independently in each graph
+        assert!(g1_states.iter().any(|s| s["task_order"] == 0));
+        assert!(g1_states.iter().any(|s| s["task_order"] == 1));
+        assert!(g2_states.iter().any(|s| s["task_order"] == 0));
+        assert!(g2_states.iter().any(|s| s["task_order"] == 1));
+
+        sqlx::query("DELETE FROM graph_tasks WHERE graph_id IN ('g-order-1', 'g-order-2')")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_upsert_graph_task_is_scoped_by_graph_id() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let task_id = "upsert-scoped-001";
+        let task_g1 = serde_json::json!({
+            "task_id": task_id,
+            "graph_id": "g-upsert-1",
+            "status": "pending",
+        });
+
+        repo.upsert_graph_task("g-upsert-1", task_id, &task_g1).await.unwrap();
+
+        // Upsert a different graph with same task_id should create a new row
+        let task_g2 = serde_json::json!({
+            "task_id": task_id,
+            "graph_id": "g-upsert-2",
+            "status": "in_progress",
+        });
+        repo.upsert_graph_task("g-upsert-2", task_id, &task_g2).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM graph_tasks WHERE task_id = $1")
+            .bind(task_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 2, "same task_id must exist in two separate rows");
+
+        // Updating g1 should not affect g2
+        let updated_g1 = serde_json::json!({
+            "task_id": task_id,
+            "graph_id": "g-upsert-1",
+            "status": "complete",
+        });
+        repo.upsert_graph_task("g-upsert-1", task_id, &updated_g1).await.unwrap();
+
+        let fetched_g2 = repo.get_graph_task_state("g-upsert-2", task_id).await.unwrap().unwrap();
+        assert_eq!(fetched_g2["task_data"]["status"], "in_progress", "g-upsert-2 must remain unchanged");
+
+        sqlx::query("DELETE FROM graph_tasks WHERE task_id = $1")
+            .bind(task_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_graph_tasks_after_is_scoped_by_graph_id() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let anchor_g1 = serde_json::json!({"task_id": "anchor-001", "graph_id": "g-insert-1", "status": "pending"});
+        let anchor_g2 = serde_json::json!({"task_id": "anchor-001", "graph_id": "g-insert-2", "status": "pending"});
+
+        repo.replace_graph_tasks(&[anchor_g1, anchor_g2]).await.unwrap();
+
+        let new_tasks_g1 = vec![
+            serde_json::json!({"task_id": "after-001", "graph_id": "g-insert-1", "status": "pending"}),
+        ];
+        let new_tasks_g2 = vec![
+            serde_json::json!({"task_id": "after-002", "graph_id": "g-insert-2", "status": "pending"}),
+        ];
+
+        repo.insert_graph_tasks_after("g-insert-1", "anchor-001", &new_tasks_g1).await.unwrap();
+        repo.insert_graph_tasks_after("g-insert-2", "anchor-001", &new_tasks_g2).await.unwrap();
+
+        let states = repo.list_graph_task_states().await.unwrap();
+        let g1_states: Vec<_> = states.iter().filter(|s| s["graph_id"] == "g-insert-1").collect();
+        let g2_states: Vec<_> = states.iter().filter(|s| s["graph_id"] == "g-insert-2").collect();
+
+        assert_eq!(g1_states.len(), 2);
+        assert_eq!(g2_states.len(), 2);
+
+        // Each graph should have its own independent ordering
+        let g1_order: Vec<i32> = g1_states.iter().map(|s| s["task_order"].as_i64().unwrap() as i32).collect();
+        let g2_order: Vec<i32> = g2_states.iter().map(|s| s["task_order"].as_i64().unwrap() as i32).collect();
+
+        assert!(g1_order.contains(&0));
+        assert!(g1_order.contains(&1));
+        assert!(g2_order.contains(&0));
+        assert!(g2_order.contains(&1));
+
+        sqlx::query("DELETE FROM graph_tasks WHERE graph_id IN ('g-insert-1', 'g-insert-2')")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_graph_tasks_after_rejects_duplicate_within_same_graph() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let anchor = serde_json::json!({"task_id": "anchor-dup", "graph_id": "g-dup", "status": "pending"});
+        let existing = serde_json::json!({"task_id": "existing-dup", "graph_id": "g-dup", "status": "pending"});
+
+        repo.replace_graph_tasks(&[anchor, existing]).await.unwrap();
+
+        let new_tasks = vec![
+            serde_json::json!({"task_id": "existing-dup", "graph_id": "g-dup", "status": "pending"}),
+        ];
+
+        let result = repo.insert_graph_tasks_after("g-dup", "anchor-dup", &new_tasks).await;
+        assert!(
+            matches!(result, Err(GraphTaskInsertError::DuplicateTask(ref id)) if id == "existing-dup"),
+            "expected DuplicateTask error within the same graph"
+        );
+
+        sqlx::query("DELETE FROM graph_tasks WHERE graph_id = 'g-dup'")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_graph_tasks_after_allows_same_task_id_in_different_graphs() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let anchor_g1 = serde_json::json!({"task_id": "anchor-cross", "graph_id": "g-cross-1", "status": "pending"});
+        let anchor_g2 = serde_json::json!({"task_id": "anchor-cross", "graph_id": "g-cross-2", "status": "pending"});
+
+        repo.replace_graph_tasks(&[anchor_g1, anchor_g2]).await.unwrap();
+
+        // Insert the same new task_id after anchors in different graphs
+        let new_tasks_g1 = vec![
+            serde_json::json!({"task_id": "cross-task", "graph_id": "g-cross-1", "status": "pending"}),
+        ];
+        let new_tasks_g2 = vec![
+            serde_json::json!({"task_id": "cross-task", "graph_id": "g-cross-2", "status": "pending"}),
+        ];
+
+        repo.insert_graph_tasks_after("g-cross-1", "anchor-cross", &new_tasks_g1).await.unwrap();
+        repo.insert_graph_tasks_after("g-cross-2", "anchor-cross", &new_tasks_g2).await.unwrap();
+
+        let fetched_g1 = repo.get_graph_task("g-cross-1", "cross-task").await.unwrap();
+        let fetched_g2 = repo.get_graph_task("g-cross-2", "cross-task").await.unwrap();
+        assert!(fetched_g1.is_some());
+        assert!(fetched_g2.is_some());
+
+        sqlx::query("DELETE FROM graph_tasks WHERE graph_id IN ('g-cross-1', 'g-cross-2')")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_recover_in_progress_graph_tasks_is_scoped_by_graph_id() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let tasks = vec![
+            serde_json::json!({"task_id": "recover-001", "graph_id": "g-recover-1", "status": "in_progress"}),
+            serde_json::json!({"task_id": "recover-001", "graph_id": "g-recover-2", "status": "complete"}),
+        ];
+
+        repo.replace_graph_tasks(&tasks).await.unwrap();
+
+        let recovered = repo.recover_in_progress_graph_tasks().await.unwrap();
+        assert_eq!(recovered, 1);
+
+        let fetched_g1 = repo.get_graph_task("g-recover-1", "recover-001").await.unwrap().unwrap();
+        let fetched_g2 = repo.get_graph_task("g-recover-2", "recover-001").await.unwrap().unwrap();
+
+        assert_eq!(fetched_g1["status"], "pending", "in_progress task in g-recover-1 must be reset to pending");
+        assert_eq!(fetched_g2["status"], "complete", "complete task in g-recover-2 must remain unchanged");
+
+        sqlx::query("DELETE FROM graph_tasks WHERE graph_id IN ('g-recover-1', 'g-recover-2')")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_next_pending_graph_task_dependencies_are_graph_scoped() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let tasks = vec![
+            serde_json::json!({"task_id": "dep-anchor", "graph_id": "g-dep-1", "status": "complete"}),
+            serde_json::json!({"task_id": "dep-child", "graph_id": "g-dep-1", "status": "pending", "dependencies": ["dep-anchor"]}),
+            serde_json::json!({"task_id": "dep-anchor", "graph_id": "g-dep-2", "status": "complete"}),
+            serde_json::json!({"task_id": "dep-child", "graph_id": "g-dep-2", "status": "pending", "dependencies": ["dep-anchor"]}),
+        ];
+
+        repo.replace_graph_tasks(&tasks).await.unwrap();
+
+        // Both children should be eligible because their respective graph has a complete dep-anchor
+        let next = repo.next_pending_graph_task(&[]).await.unwrap();
+        assert!(next.is_some());
+
+        // Mark g-dep-1 child as complete, leaving g-dep-2 child still pending with its own anchor complete
+        let updated = serde_json::json!({"task_id": "dep-child", "graph_id": "g-dep-1", "status": "complete", "dependencies": ["dep-anchor"]});
+        repo.upsert_graph_task("g-dep-1", "dep-child", &updated).await.unwrap();
+
+        let next2 = repo.next_pending_graph_task(&[]).await.unwrap();
+        assert!(next2.is_some());
+        assert_eq!(next2.unwrap()["graph_id"], "g-dep-2");
+
+        // Now mark g-dep-2 anchor as pending so g-dep-2 child has an incomplete dependency
+        let updated_anchor = serde_json::json!({"task_id": "dep-anchor", "graph_id": "g-dep-2", "status": "pending"});
+        repo.upsert_graph_task("g-dep-2", "dep-anchor", &updated_anchor).await.unwrap();
+
+        let next3 = repo.next_pending_graph_task(&[]).await.unwrap();
+        assert!(next3.is_none(), "g-dep-2 child should be blocked because its graph-local dep-anchor is pending");
+
+        sqlx::query("DELETE FROM graph_tasks WHERE graph_id IN ('g-dep-1', 'g-dep-2')")
             .execute(&pool)
             .await
             .unwrap();

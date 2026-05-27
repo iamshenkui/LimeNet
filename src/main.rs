@@ -2,7 +2,7 @@ pub mod config;
 pub mod contracts;
 pub mod state;
 
-use axum::{Json, Router, extract::{Path, State}, http::StatusCode, response::IntoResponse, routing::{get, post}};
+use axum::{Json, Router, extract::{Path, Query, State}, http::StatusCode, response::IntoResponse, routing::{get, post}};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -34,6 +34,8 @@ struct GraphTasksPayload {
 #[derive(Debug, Deserialize)]
 struct GraphInsertPayload {
     anchor_task_id: String,
+    #[serde(default)]
+    anchor_graph_id: String,
     tasks: Vec<Value>,
 }
 
@@ -41,6 +43,16 @@ struct GraphInsertPayload {
 struct GraphNextPendingRequest {
     #[serde(default)]
     exclude_task_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct GraphTaskQuery {
+    #[serde(default = "default_graph_id")]
+    graph_id: String,
+}
+
+fn default_graph_id() -> String {
+    "default".to_string()
 }
 
 async fn list_graph_tasks(
@@ -60,9 +72,10 @@ async fn list_graph_tasks(
 async fn get_graph_task(
     State(state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
+    Query(query): Query<GraphTaskQuery>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.get_graph_task_state(&task_id).await {
+    match repo.get_graph_task_state(&query.graph_id, &task_id).await {
         Ok(Some(task)) => (StatusCode::OK, Json(task)).into_response(),
         Ok(None) => (StatusCode::OK, Json(json!({ "status": "not_found" }))).into_response(),
         Err(err) => (
@@ -94,7 +107,11 @@ async fn upsert_graph_task(
     Json(task): Json<Value>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.upsert_graph_task(&task_id, &task).await {
+    let graph_id = task
+        .get("graph_id")
+        .and_then(Value::as_str)
+        .unwrap_or("default");
+    match repo.upsert_graph_task(graph_id, &task_id, &task).await {
         Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
         Err(err) => (
             StatusCode::BAD_REQUEST,
@@ -109,7 +126,17 @@ async fn insert_graph_tasks_after(
     Json(payload): Json<GraphInsertPayload>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.insert_graph_tasks_after(&payload.anchor_task_id, &payload.tasks).await {
+    let graph_id = if !payload.anchor_graph_id.is_empty() {
+        payload.anchor_graph_id.clone()
+    } else {
+        payload
+            .tasks
+            .first()
+            .and_then(|t| t.get("graph_id").and_then(Value::as_str))
+            .unwrap_or("default")
+            .to_string()
+    };
+    match repo.insert_graph_tasks_after(&graph_id, &payload.anchor_task_id, &payload.tasks).await {
         Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
         Err(GraphTaskInsertError::UnknownAnchor(task_id)) => (
             StatusCode::NOT_FOUND,
