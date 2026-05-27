@@ -2,7 +2,7 @@ pub mod config;
 pub mod contracts;
 pub mod state;
 
-use axum::{Json, Router, extract::{Path, Query, State}, http::StatusCode, response::IntoResponse, routing::{get, post}};
+use axum::{Json, Router, extract::{Path, Query, State}, http::StatusCode, response::IntoResponse, routing::{delete, get, post}};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -41,6 +41,8 @@ struct GraphInsertPayload {
 
 #[derive(Debug, Deserialize, Default)]
 struct GraphNextPendingRequest {
+    #[serde(default = "default_graph_id")]
+    graph_id: String,
     #[serde(default)]
     exclude_task_ids: Vec<String>,
 }
@@ -57,9 +59,10 @@ fn default_graph_id() -> String {
 
 async fn list_graph_tasks(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<GraphTaskQuery>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.list_graph_task_states().await {
+    match repo.list_graph_task_states(&query.graph_id).await {
         Ok(tasks) => (StatusCode::OK, Json(json!({ "tasks": tasks }))).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -88,10 +91,11 @@ async fn get_graph_task(
 
 async fn replace_graph_tasks(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<GraphTaskQuery>,
     Json(payload): Json<GraphTasksPayload>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.replace_graph_tasks(&payload.tasks).await {
+    match repo.replace_graph_tasks(&query.graph_id, &payload.tasks).await {
         Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
         Err(err) => (
             StatusCode::BAD_REQUEST,
@@ -166,10 +170,10 @@ async fn next_pending_graph_task(
     request: Option<Json<GraphNextPendingRequest>>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    let exclude_task_ids = request
-        .map(|Json(body)| body.exclude_task_ids)
-        .unwrap_or_default();
-    match repo.next_pending_graph_task(&exclude_task_ids).await {
+    let (graph_id, exclude_task_ids) = request
+        .map(|Json(body)| (body.graph_id, body.exclude_task_ids))
+        .unwrap_or_else(|| (default_graph_id(), vec![]));
+    match repo.next_pending_graph_task(&graph_id, &exclude_task_ids).await {
         Ok(Some(task)) => (StatusCode::OK, Json(json!({ "task": task }))).into_response(),
         Ok(None) => (StatusCode::OK, Json(json!({}))).into_response(),
         Err(err) => (
@@ -182,12 +186,34 @@ async fn next_pending_graph_task(
 
 async fn recover_graph_tasks(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<GraphTaskQuery>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.recover_in_progress_graph_tasks().await {
+    match repo.recover_in_progress_graph_tasks(&query.graph_id).await {
         Ok(recovered_count) => (
             StatusCode::OK,
             Json(json!({ "recovered_count": recovered_count })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_graph_task(
+    State(state): State<Arc<AppState>>,
+    Path(task_id): Path<String>,
+    Query(query): Query<GraphTaskQuery>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.delete_graph_task(&query.graph_id, &task_id).await {
+        Ok(true) => (StatusCode::OK, Json(json!({}))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "task not found" })),
         )
             .into_response(),
         Err(err) => (
@@ -549,7 +575,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/graph/tasks/insert", post(insert_graph_tasks_after))
         .route("/api/v1/graph/tasks/next_pending", post(next_pending_graph_task))
         .route("/api/v1/graph/tasks/recover", post(recover_graph_tasks))
-        .route("/api/v1/graph/tasks/{task_id}", get(get_graph_task).put(upsert_graph_task))
+        .route("/api/v1/graph/tasks/{task_id}", get(get_graph_task).put(upsert_graph_task).delete(delete_graph_task))
         .route("/api/v1/tasks/batch", post(create_tasks_batch))
         .route("/api/v1/tasks/claim", post(claim_task))
         .route("/api/v1/tasks/{task_id}/heartbeat", post(heartbeat_task))

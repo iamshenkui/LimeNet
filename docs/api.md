@@ -42,7 +42,11 @@ http://127.0.0.1:3000
 
 ### `GET /api/v1/graph/tasks`
 
-按 `task_order ASC` 返回当前 meta-agent task graph。
+按 `task_order ASC` 返回指定 graph 的 meta-agent task graph。
+
+Query 参数：
+
+- `graph_id`（可选）：目标 graph 标识符，默认值为 `"default"`
 
 Response:
 
@@ -61,7 +65,13 @@ Response:
 
 ### `POST /api/v1/graph/tasks`
 
-整体替换当前 meta-agent task graph。请求体形状与 `GET /api/v1/graph/tasks` 一致：
+整体替换指定 graph 的 meta-agent task graph。
+
+Query 参数：
+
+- `graph_id`（可选）：目标 graph 标识符，默认值为 `"default"`。只删除并替换该 graph 下的任务。
+
+请求体形状与 `GET /api/v1/graph/tasks` 一致：
 
 ```json
 {
@@ -78,7 +88,13 @@ Response:
 
 ### `GET /api/v1/graph/tasks/{task_id}`
 
-返回单个 meta-agent task payload。未找到时返回：
+返回单个 meta-agent task payload。
+
+Query 参数：
+
+- `graph_id`（可选）：目标 graph 标识符，默认值为 `"default"`
+
+未找到时返回：
 
 ```json
 { "status": "not_found" }
@@ -86,15 +102,16 @@ Response:
 
 ### `PUT /api/v1/graph/tasks/{task_id}`
 
-插入或更新单个 meta-agent task payload。新任务会追加到当前 graph 末尾；已有任务保持原 `task_order`。
+插入或更新单个 meta-agent task payload。新任务会追加到指定 graph 末尾；已有任务保持原 `task_order`。请求体中可包含 `graph_id` 字段，未提供时默认使用 `"default"`。
 
 ### `POST /api/v1/graph/tasks/insert`
 
-在指定 task 后插入一组新任务。
+在指定 graph 的指定 task 后插入一组新任务。
 
 ```json
 {
   "anchor_task_id": "US-001",
+  "anchor_graph_id": "default",
   "tasks": [
     {
       "task_id": "US-001-a",
@@ -106,15 +123,20 @@ Response:
 }
 ```
 
+- `anchor_graph_id`（可选）：目标 graph 标识符，默认值为 `"default"`
+
 ### `POST /api/v1/graph/tasks/next_pending`
 
-返回下一个可运行的 `pending` task。依赖项必须全部为 `complete`，排序规则为 priority 降序、原 graph 顺序升序。
+返回指定 graph 下一个可运行的 `pending` task。依赖项必须全部为 `complete`，排序规则为 priority 降序、原 graph 顺序升序。
 
 ```json
 {
+  "graph_id": "default",
   "exclude_task_ids": ["US-001"]
 }
 ```
+
+- `graph_id`（可选）：目标 graph 标识符，默认值为 `"default"`
 
 Response:
 
@@ -136,11 +158,28 @@ Response:
 
 ### `POST /api/v1/graph/tasks/recover`
 
-将所有 `in_progress` task 恢复为 `pending`。
+将指定 graph 中所有 `in_progress` task 恢复为 `pending`。
+
+Query 参数：
+
+- `graph_id`（可选）：目标 graph 标识符，默认值为 `"default"`
 
 ```json
 { "recovered_count": 1 }
 ```
+
+### `DELETE /api/v1/graph/tasks/{task_id}`
+
+删除指定 graph 中的单个 task。
+
+Query 参数：
+
+- `graph_id`（可选）：目标 graph 标识符，默认值为 `"default"`
+
+Response:
+
+- `200 OK`：删除成功
+- `404 Not Found`：任务不存在
 
 ## `POST /api/v1/tasks/batch`
 
