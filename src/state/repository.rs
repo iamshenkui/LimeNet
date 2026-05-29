@@ -702,7 +702,11 @@ impl<'a> TaskRepository<'a> {
         Ok(recovered)
     }
 
-    pub async fn run_summary(&self, run_id: Uuid) -> sqlx::Result<RunSummary> {
+    pub async fn run_summary(
+        &self,
+        run_id: Uuid,
+        include_next: bool,
+    ) -> sqlx::Result<RunSummary> {
         let rows: Vec<(Option<String>, i64)> = sqlx::query_as(
             r#"
             SELECT task_data->>'status' AS status, COUNT(*)::bigint
@@ -727,10 +731,13 @@ impl<'a> TaskRepository<'a> {
             }
         }
 
-        let next_pending_task_id = self
-            .next_pending_graph_task_for_run(run_id, &[])
-            .await?
-            .and_then(|task| graph_task_id(&task));
+        let next_pending_task_id = if include_next {
+            self.next_pending_graph_task_for_run(run_id, &[])
+                .await?
+                .and_then(|task| graph_task_id(&task))
+        } else {
+            None
+        };
 
         let updated_at: (Option<DateTime<Utc>>,) = sqlx::query_as(
             "SELECT MAX(updated_at) FROM graph_tasks WHERE run_id = $1",
@@ -771,7 +778,7 @@ impl<'a> TaskRepository<'a> {
         Ok(rows
             .into_iter()
             .map(|(task_id, status, updated_at)| RunTimelineEvent {
-                kind: "task_updated".to_string(),
+                kind: "task_snapshot".to_string(),
                 task_id,
                 status,
                 updated_at,
@@ -1638,15 +1645,22 @@ mod tests {
         .await
         .unwrap();
 
-        let summary_a = repo.run_summary(run_a).await.unwrap();
-        let summary_b = repo.run_summary(run_b).await.unwrap();
+        let summary_a = repo.run_summary(run_a, false).await.unwrap();
+        let summary_b = repo.run_summary(run_b, false).await.unwrap();
         assert_eq!(summary_a.task_count, 3);
         assert_eq!(summary_a.status_counts.get("pending"), Some(&1));
         assert_eq!(summary_a.status_counts.get("complete"), Some(&1));
         assert_eq!(summary_a.missing_status_count, 1);
+        assert_eq!(summary_a.next_pending_task_id, None);
         assert_eq!(summary_b.task_count, 1);
         assert_eq!(summary_b.status_counts.get("pending"), Some(&1));
         assert_eq!(summary_b.missing_status_count, 0);
+
+        let summary_a_with_next = repo.run_summary(run_a, true).await.unwrap();
+        assert_eq!(
+            summary_a_with_next.next_pending_task_id.as_deref(),
+            Some("a1")
+        );
 
         cleanup_run(&pool, run_a).await;
         cleanup_run(&pool, run_b).await;

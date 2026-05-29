@@ -2,7 +2,13 @@ pub mod config;
 pub mod contracts;
 pub mod state;
 
-use axum::{Json, Router, extract::{Path, State}, http::StatusCode, response::IntoResponse, routing::{get, post}};
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -42,6 +48,12 @@ struct GraphInsertPayload {
 struct GraphNextPendingRequest {
     #[serde(default)]
     exclude_task_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RunSummaryQuery {
+    #[serde(default)]
+    include_next: bool,
 }
 
 async fn list_graph_tasks(
@@ -111,6 +123,7 @@ async fn get_run(
 async fn run_summary(
     State(state): State<Arc<AppState>>,
     Path(run_id): Path<uuid::Uuid>,
+    Query(query): Query<RunSummaryQuery>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
     match repo.run_exists(run_id).await {
@@ -125,7 +138,7 @@ async fn run_summary(
         }
     }
 
-    match repo.run_summary(run_id).await {
+    match repo.run_summary(run_id, query.include_next).await {
         Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -166,11 +179,15 @@ async fn run_timeline(
 async fn ensure_scoped_run(
     repo: &TaskRepository<'_>,
     run_id: uuid::Uuid,
-) -> Result<(), StatusCode> {
+) -> Result<(), Response> {
     match repo.run_exists(run_id).await {
         Ok(true) => Ok(()),
-        Ok(false) => Err(StatusCode::NOT_FOUND),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Ok(false) => Err(StatusCode::NOT_FOUND.into_response()),
+        Err(err) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response()),
     }
 }
 
@@ -179,8 +196,8 @@ async fn list_graph_tasks_for_run(
     Path(run_id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    if let Err(status) = ensure_scoped_run(&repo, run_id).await {
-        return status.into_response();
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
     }
 
     match repo.list_graph_tasks_for_run(run_id).await {
@@ -199,13 +216,13 @@ async fn get_graph_task_for_run(
     Path((run_id, task_id)): Path<(uuid::Uuid, String)>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    if let Err(status) = ensure_scoped_run(&repo, run_id).await {
-        return status.into_response();
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
     }
 
     match repo.get_graph_task_for_run(run_id, &task_id).await {
         Ok(Some(task)) => (StatusCode::OK, Json(task)).into_response(),
-        Ok(None) => (StatusCode::OK, Json(json!({ "status": "not_found" }))).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": err.to_string() })),
@@ -220,8 +237,8 @@ async fn replace_graph_tasks_for_run(
     Json(payload): Json<GraphTasksPayload>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    if let Err(status) = ensure_scoped_run(&repo, run_id).await {
-        return status.into_response();
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
     }
 
     match repo.replace_graph_tasks_for_run(run_id, &payload.tasks).await {
@@ -256,8 +273,8 @@ async fn upsert_graph_task_for_run(
     Json(task): Json<Value>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    if let Err(status) = ensure_scoped_run(&repo, run_id).await {
-        return status.into_response();
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
     }
 
     match repo.upsert_graph_task_for_run(run_id, &task_id, &task).await {
@@ -276,8 +293,8 @@ async fn insert_graph_tasks_after_for_run(
     Json(payload): Json<GraphInsertPayload>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    if let Err(status) = ensure_scoped_run(&repo, run_id).await {
-        return status.into_response();
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
     }
 
     match repo
@@ -314,8 +331,8 @@ async fn next_pending_graph_task_for_run(
     request: Option<Json<GraphNextPendingRequest>>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    if let Err(status) = ensure_scoped_run(&repo, run_id).await {
-        return status.into_response();
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
     }
 
     let exclude_task_ids = request
@@ -342,8 +359,8 @@ async fn recover_graph_tasks_for_run(
     Path(run_id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    if let Err(status) = ensure_scoped_run(&repo, run_id).await {
-        return status.into_response();
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
     }
 
     match repo.recover_in_progress_graph_tasks_for_run(run_id).await {

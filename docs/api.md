@@ -80,7 +80,8 @@ Response:
 
 ### `GET /api/v1/runs/{run_id}/summary`
 
-返回单个 run 的 task 数量、状态聚合和下一个可运行 task。
+返回单个 run 的 task 数量和状态聚合。默认不计算下一个可运行 task，避免 dashboard
+轮询时全量加载任务图；需要时可传 `?include_next=true`。
 `status_counts` 只统计 payload 中显式存在的 status；缺失或 JSON null 的 status 会统计到
 `missing_status_count`，避免和真实的 `"unknown"` status 混淆。
 
@@ -95,14 +96,15 @@ Response:
     "complete": 1
   },
   "missing_status_count": 1,
-  "next_pending_task_id": "US-002",
+  "next_pending_task_id": null,
   "updated_at": "2026-05-29T00:00:00Z"
 }
 ```
 
 ### `GET /api/v1/runs/{run_id}/timeline`
 
-返回单个 run 的最小 task 更新时间线。
+返回单个 run 的 task 最新状态快照，按 `updated_at` 倒序排列。当前不是完整事件流；
+同一个 task 多次变更只会返回最新一条快照，事件 `kind` 为 `"task_snapshot"`。
 
 ### Scoped graph endpoints
 
@@ -117,6 +119,8 @@ POST /api/v1/runs/{run_id}/graph/tasks/insert
 POST /api/v1/runs/{run_id}/graph/tasks/next_pending
 POST /api/v1/runs/{run_id}/graph/tasks/recover
 ```
+
+Scoped task get 未找到 task 时返回 `404 Not Found`。
 
 Scoped `next_pending` 有可运行任务时返回：
 
