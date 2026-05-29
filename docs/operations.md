@@ -70,9 +70,29 @@ cargo run
 LimeNet task orchestrator starting on 127.0.0.1:8080...
 ```
 
-### 5. 在同一台机器上运行多个实例
+### 5. 在同一台机器上运行多个 run
+
+推荐的新路径是：一个 LimeNet 服务端口承载多个 run，每个 run 用独立 `run_id` 隔离任务图。
+
+```bash
+curl -fsS -X POST http://127.0.0.1:3000/api/v1/runs \
+  -H 'Content-Type: application/json' \
+  --data '{"display_name":"PORT-24H-011","source_kind":"task","source_ref":"PORT-24H-011"}'
+```
+
+随后使用 run-scoped graph API：
+
+```bash
+curl -fsS http://127.0.0.1:3000/api/v1/runs/<run_id>/summary
+```
+
+这种方式不需要为每个并行任务分配新端口或新数据库，适合后续 dashboard 从同一个 base URL 汇总所有 run。
+
+### 6. 兼容：在同一台机器上运行多个实例
 
 每个 LimeNet 实例需要 **独立的 `DATABASE_URL` 数据库** 和独立的 `LIMENET_BIND` 端口，避免数据混用。
+
+这是历史兼容路径。只有在需要进程级或数据库级硬隔离时才建议继续使用；一般并行任务优先使用 run-scoped API。
 
 推荐做法是为不同用途创建独立的数据库：
 
@@ -101,7 +121,7 @@ cargo run
 - CI 测试用例污染生产数据
 - 多个实例竞争同一套任务表
 
-### 6. 配置实例身份标识
+### 7. 配置实例身份标识
 
 通过环境变量 `LIMENET_INSTANCE_ID` 可以为每个 LimeNet 实例设置一个可读的身份标识，便于运维区分本地任务后端和共享实例：
 
@@ -123,7 +143,7 @@ cargo run
 
 如果不设置 `LIMENET_INSTANCE_ID`，默认值为 `"default"`。空白值会被自动回退到默认值，避免意外导出空字符串导致身份丢失。
 
-### 7. 验证当前连接的实例身份
+### 8. 验证当前连接的实例身份
 
 启动后访问 `/health` 端点即可确认当前实例的身份：
 

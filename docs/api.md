@@ -40,6 +40,110 @@ http://127.0.0.1:3000
 
 以下接口服务于 `meta-agent` 的 `TaskGraphBackend` / `LocalLimeNetStateBackend` 兼容层。它们保存的是 meta-agent 的完整 task graph payload，使用字符串 `task_id`，并与 LimeNet 原生 UUID worker task API 分开存储。
 
+未带 `run_id` 的兼容接口会映射到固定 default run：`00000000-0000-0000-0000-000000000000`。新客户端应优先使用下面的 run-scoped API，避免多个任务图在同一个服务内互相覆盖。
+
+## Run-scoped Graph Task API
+
+### `POST /api/v1/runs`
+
+创建一个 run namespace。未提供 `run_id` 时由 LimeNet 生成 UUID。
+如果请求提供了已存在的 `run_id`，LimeNet 返回已有 run，HTTP status 为 `200 OK`；
+新建成功时 HTTP status 为 `201 Created`。
+
+```json
+{
+  "display_name": "PORT-24H-011",
+  "source_kind": "task",
+  "source_ref": "PORT-24H-011",
+  "metadata": {}
+}
+```
+
+Response:
+
+```json
+{
+  "run_id": "11111111-1111-1111-1111-111111111111",
+  "display_name": "PORT-24H-011",
+  "source_kind": "task",
+  "source_ref": "PORT-24H-011",
+  "status": "active",
+  "metadata": {},
+  "created_at": "2026-05-29T00:00:00Z",
+  "updated_at": "2026-05-29T00:00:00Z"
+}
+```
+
+### `GET /api/v1/runs`
+
+返回所有 run 的 dashboard 列表投影。
+
+### `GET /api/v1/runs/{run_id}/summary`
+
+返回单个 run 的 task 数量和状态聚合。默认不计算下一个可运行 task，避免 dashboard
+轮询时全量加载任务图；需要时可传 `?include_next=true`。
+`status_counts` 只统计 payload 中显式存在的 status；缺失或 JSON null 的 status 会统计到
+`missing_status_count`，避免和真实的 `"unknown"` status 混淆。
+
+Response:
+
+```json
+{
+  "run_id": "11111111-1111-1111-1111-111111111111",
+  "task_count": 3,
+  "status_counts": {
+    "pending": 1,
+    "complete": 1
+  },
+  "missing_status_count": 1,
+  "next_pending_task_id": null,
+  "updated_at": "2026-05-29T00:00:00Z"
+}
+```
+
+### `GET /api/v1/runs/{run_id}/timeline`
+
+返回单个 run 的 task 最新状态快照，按 `updated_at` 倒序排列。当前不是完整事件流；
+同一个 task 多次变更只会返回最新一条快照，事件 `kind` 为 `"task_snapshot"`。
+
+### Scoped graph endpoints
+
+以下 endpoint 与兼容 API 的行为一致，但所有读写都限制在指定 `run_id` 内：
+
+```text
+GET  /api/v1/runs/{run_id}/graph/tasks
+POST /api/v1/runs/{run_id}/graph/tasks
+GET  /api/v1/runs/{run_id}/graph/tasks/{task_id}
+PUT  /api/v1/runs/{run_id}/graph/tasks/{task_id}
+POST /api/v1/runs/{run_id}/graph/tasks/insert
+POST /api/v1/runs/{run_id}/graph/tasks/next_pending
+POST /api/v1/runs/{run_id}/graph/tasks/recover
+```
+
+Scoped task get 未找到 task 时返回 `404 Not Found`。
+
+Scoped `next_pending` 有可运行任务时返回：
+
+```json
+{
+  "run_id": "11111111-1111-1111-1111-111111111111",
+  "task": {
+    "task_id": "US-002",
+    "title": "Next task",
+    "status": "pending"
+  }
+}
+```
+
+无可运行任务时仍保留 `task` 字段，值为 `null`：
+
+```json
+{
+  "run_id": "11111111-1111-1111-1111-111111111111",
+  "task": null
+}
+```
+
 ### `GET /api/v1/graph/tasks`
 
 按 `task_order ASC` 返回当前 meta-agent task graph。

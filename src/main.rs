@@ -2,7 +2,13 @@ pub mod config;
 pub mod contracts;
 pub mod state;
 
-use axum::{Json, Router, extract::{Path, State}, http::StatusCode, response::IntoResponse, routing::{get, post}};
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -14,8 +20,9 @@ use limenet::contracts::{
     HeartbeatRequest, Ownership,
 };
 use limenet::state::{
-    BackoffAwakener, BatchError, BatchTaskInput, DependencyResolver, GraphTaskInsertError,
-    HeartbeatError, LeaseReaper, SubmitError, SubmitRequest, TaskRepository,
+    BackoffAwakener, BatchError, BatchTaskInput, CreateRunInput, DEFAULT_RUN_ID,
+    DependencyResolver, GraphTaskInsertError, HeartbeatError, LeaseReaper, SubmitError,
+    SubmitRequest, TaskRepository,
 };
 
 #[derive(Clone)]
@@ -43,6 +50,12 @@ struct GraphNextPendingRequest {
     exclude_task_ids: Vec<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct RunSummaryQuery {
+    #[serde(default)]
+    include_next: bool,
+}
+
 async fn list_graph_tasks(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
@@ -57,6 +70,187 @@ async fn list_graph_tasks(
     }
 }
 
+async fn create_run(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<CreateRunInput>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.create_run(payload).await {
+        Ok(outcome) => {
+            let status = if outcome.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            };
+            (status, Json(outcome.run)).into_response()
+        }
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn list_runs(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.list_runs().await {
+        Ok(runs) => (StatusCode::OK, Json(json!({ "runs": runs }))).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_run(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.get_run(run_id).await {
+        Ok(Some(run)) => (StatusCode::OK, Json(run)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn run_summary(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<uuid::Uuid>,
+    Query(query): Query<RunSummaryQuery>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.run_exists(run_id).await {
+        Ok(true) => {}
+        Ok(false) => return StatusCode::NOT_FOUND.into_response(),
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": err.to_string() })),
+            )
+                .into_response();
+        }
+    }
+
+    match repo.run_summary(run_id, query.include_next).await {
+        Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn run_timeline(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.run_exists(run_id).await {
+        Ok(true) => {}
+        Ok(false) => return StatusCode::NOT_FOUND.into_response(),
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": err.to_string() })),
+            )
+                .into_response();
+        }
+    }
+
+    match repo.run_timeline(run_id, 100).await {
+        Ok(events) => (StatusCode::OK, Json(json!({ "run_id": run_id, "events": events })))
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn ensure_scoped_run(
+    repo: &TaskRepository<'_>,
+    run_id: uuid::Uuid,
+) -> Result<(), Response> {
+    match repo.run_exists(run_id).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(StatusCode::NOT_FOUND.into_response()),
+        Err(err) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response()),
+    }
+}
+
+async fn list_graph_tasks_for_run(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
+    }
+
+    match repo.list_graph_tasks_for_run(run_id).await {
+        Ok(tasks) => (StatusCode::OK, Json(json!({ "run_id": run_id, "tasks": tasks })))
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_graph_task_for_run(
+    State(state): State<Arc<AppState>>,
+    Path((run_id, task_id)): Path<(uuid::Uuid, String)>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
+    }
+
+    match repo.get_graph_task_for_run(run_id, &task_id).await {
+        Ok(Some(task)) => (StatusCode::OK, Json(task)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn replace_graph_tasks_for_run(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<uuid::Uuid>,
+    Json(payload): Json<GraphTasksPayload>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
+    }
+
+    match repo.replace_graph_tasks_for_run(run_id, &payload.tasks).await {
+        Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 async fn get_graph_task(
     State(state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
@@ -65,6 +259,116 @@ async fn get_graph_task(
     match repo.get_graph_task(&task_id).await {
         Ok(Some(task)) => (StatusCode::OK, Json(task)).into_response(),
         Ok(None) => (StatusCode::OK, Json(json!({ "status": "not_found" }))).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn upsert_graph_task_for_run(
+    State(state): State<Arc<AppState>>,
+    Path((run_id, task_id)): Path<(uuid::Uuid, String)>,
+    Json(task): Json<Value>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
+    }
+
+    match repo.upsert_graph_task_for_run(run_id, &task_id, &task).await {
+        Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn insert_graph_tasks_after_for_run(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<uuid::Uuid>,
+    Json(payload): Json<GraphInsertPayload>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
+    }
+
+    match repo
+        .insert_graph_tasks_after_for_run(run_id, &payload.anchor_task_id, &payload.tasks)
+        .await
+    {
+        Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
+        Err(GraphTaskInsertError::UnknownAnchor(task_id)) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Unknown task: {task_id}") })),
+        )
+            .into_response(),
+        Err(GraphTaskInsertError::DuplicateTask(task_id)) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": format!("Task already exists: {task_id}") })),
+        )
+            .into_response(),
+        Err(GraphTaskInsertError::InvalidTaskPayload) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "graph task payload missing non-empty task_id" })),
+        )
+            .into_response(),
+        Err(GraphTaskInsertError::SqlxError(err)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn next_pending_graph_task_for_run(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<uuid::Uuid>,
+    request: Option<Json<GraphNextPendingRequest>>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
+    }
+
+    let exclude_task_ids = request
+        .map(|Json(body)| body.exclude_task_ids)
+        .unwrap_or_default();
+    match repo
+        .next_pending_graph_task_for_run(run_id, &exclude_task_ids)
+        .await
+    {
+        Ok(Some(task)) => (StatusCode::OK, Json(json!({ "run_id": run_id, "task": task })))
+            .into_response(),
+        Ok(None) => (StatusCode::OK, Json(json!({ "run_id": run_id, "task": null })))
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn recover_graph_tasks_for_run(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
+    }
+
+    match repo.recover_in_progress_graph_tasks_for_run(run_id).await {
+        Ok(recovered_count) => (
+            StatusCode::OK,
+            Json(json!({ "run_id": run_id, "recovered_count": recovered_count })),
+        )
+            .into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": err.to_string() })),
@@ -490,6 +794,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("LimeNet connecting to database {database_target}...");
 
     let pool = sqlx::PgPool::connect(&database_url).await?;
+    TaskRepository::new(&pool).ensure_run(DEFAULT_RUN_ID).await?;
 
     let notify = Arc::new(Notify::new());
     let resolver = DependencyResolver::new(&pool, Arc::clone(&notify));
@@ -518,6 +823,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/health", get(health_handler))
+        .route("/api/v1/runs", get(list_runs).post(create_run))
+        .route("/api/v1/runs/{run_id}", get(get_run))
+        .route("/api/v1/runs/{run_id}/summary", get(run_summary))
+        .route("/api/v1/runs/{run_id}/timeline", get(run_timeline))
+        .route(
+            "/api/v1/runs/{run_id}/graph/tasks",
+            get(list_graph_tasks_for_run).post(replace_graph_tasks_for_run),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/graph/tasks/insert",
+            post(insert_graph_tasks_after_for_run),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/graph/tasks/next_pending",
+            post(next_pending_graph_task_for_run),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/graph/tasks/recover",
+            post(recover_graph_tasks_for_run),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/graph/tasks/{task_id}",
+            get(get_graph_task_for_run).put(upsert_graph_task_for_run),
+        )
         .route("/api/v1/graph/tasks", get(list_graph_tasks).post(replace_graph_tasks))
         .route("/api/v1/graph/tasks/insert", post(insert_graph_tasks_after))
         .route("/api/v1/graph/tasks/next_pending", post(next_pending_graph_task))
