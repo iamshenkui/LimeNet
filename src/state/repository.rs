@@ -43,6 +43,12 @@ pub struct RunRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CreateRunOutcome {
+    pub run: RunRecord,
+    pub created: bool,
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RunListItem {
     pub run_id: Uuid,
@@ -60,6 +66,7 @@ pub struct RunSummary {
     pub run_id: Uuid,
     pub task_count: i64,
     pub status_counts: HashMap<String, i64>,
+    pub missing_status_count: i64,
     pub next_pending_task_id: Option<String>,
     pub updated_at: Option<DateTime<Utc>>,
 }
@@ -160,17 +167,16 @@ impl<'a> TaskRepository<'a> {
         .map(|_| ())
     }
 
-    pub async fn create_run(&self, input: CreateRunInput) -> sqlx::Result<RunRecord> {
+    pub async fn create_run(&self, input: CreateRunInput) -> sqlx::Result<CreateRunOutcome> {
         let run_id = input.run_id.unwrap_or_else(Uuid::new_v4);
         let source_kind = input.source_kind.unwrap_or_else(|| "manual".to_string());
         let metadata = input.metadata.unwrap_or_else(|| serde_json::json!({}));
 
-        sqlx::query_as(
+        let inserted: Option<RunRecord> = sqlx::query_as(
             r#"
             INSERT INTO runs (run_id, display_name, source_kind, source_ref, metadata)
             VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (run_id) DO UPDATE
-            SET run_id = runs.run_id
+            ON CONFLICT (run_id) DO NOTHING
             RETURNING run_id, display_name, source_kind, source_ref, status, metadata, created_at, updated_at
             "#,
         )
@@ -179,8 +185,18 @@ impl<'a> TaskRepository<'a> {
         .bind(source_kind)
         .bind(input.source_ref)
         .bind(metadata)
-        .fetch_one(self.pool)
-        .await
+        .fetch_optional(self.pool)
+        .await?;
+
+        if let Some(run) = inserted {
+            return Ok(CreateRunOutcome { run, created: true });
+        }
+
+        let run = self.get_run(run_id).await?.ok_or(sqlx::Error::RowNotFound)?;
+        Ok(CreateRunOutcome {
+            run,
+            created: false,
+        })
     }
 
     pub async fn get_run(&self, run_id: Uuid) -> sqlx::Result<Option<RunRecord>> {
@@ -701,9 +717,14 @@ impl<'a> TaskRepository<'a> {
 
         let mut status_counts = HashMap::new();
         let mut task_count = 0_i64;
+        let mut missing_status_count = 0_i64;
         for (status, count) in rows {
             task_count += count;
-            status_counts.insert(status.unwrap_or_else(|| "unknown".to_string()), count);
+            if let Some(status) = status {
+                status_counts.insert(status, count);
+            } else {
+                missing_status_count += count;
+            }
         }
 
         let next_pending_task_id = self
@@ -722,6 +743,7 @@ impl<'a> TaskRepository<'a> {
             run_id,
             task_count,
             status_counts,
+            missing_status_count,
             next_pending_task_id,
             updated_at: updated_at.0,
         })
@@ -1449,6 +1471,185 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    fn graph_task(
+        task_id: &str,
+        status: Option<&str>,
+        priority: i64,
+        dependencies: &[&str],
+    ) -> Value {
+        let mut task = serde_json::json!({
+            "task_id": task_id,
+            "priority": priority,
+            "dependencies": dependencies,
+        });
+        if let Some(status) = status {
+            task["status"] = Value::String(status.to_string());
+        }
+        task
+    }
+
+    async fn cleanup_run(pool: &PgPool, run_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM runs WHERE run_id = $1")
+            .bind(run_id)
+            .execute(pool)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_run_scoped_graph_tasks_allow_same_task_id_and_order() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let run_a = Uuid::new_v4();
+        let run_b = Uuid::new_v4();
+
+        repo.ensure_run(run_a).await.unwrap();
+        repo.ensure_run(run_b).await.unwrap();
+        repo.replace_graph_tasks_for_run(
+            run_a,
+            &[graph_task("same", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+        repo.replace_graph_tasks_for_run(
+            run_b,
+            &[graph_task("same", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+
+        let tasks_a = repo.list_graph_tasks_for_run(run_a).await.unwrap();
+        let tasks_b = repo.list_graph_tasks_for_run(run_b).await.unwrap();
+        assert_eq!(tasks_a.len(), 1);
+        assert_eq!(tasks_b.len(), 1);
+        assert_eq!(graph_task_id(&tasks_a[0]).as_deref(), Some("same"));
+        assert_eq!(graph_task_id(&tasks_b[0]).as_deref(), Some("same"));
+
+        cleanup_run(&pool, run_a).await;
+        cleanup_run(&pool, run_b).await;
+    }
+
+    #[tokio::test]
+    async fn test_replace_graph_tasks_for_run_only_deletes_target_run() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let run_a = Uuid::new_v4();
+        let run_b = Uuid::new_v4();
+
+        repo.ensure_run(run_a).await.unwrap();
+        repo.ensure_run(run_b).await.unwrap();
+        repo.replace_graph_tasks_for_run(
+            run_a,
+            &[graph_task("a1", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+        repo.replace_graph_tasks_for_run(
+            run_b,
+            &[graph_task("b1", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+        repo.replace_graph_tasks_for_run(
+            run_a,
+            &[graph_task("a2", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+
+        let tasks_a = repo.list_graph_tasks_for_run(run_a).await.unwrap();
+        let tasks_b = repo.list_graph_tasks_for_run(run_b).await.unwrap();
+        assert_eq!(tasks_a.len(), 1);
+        assert_eq!(tasks_b.len(), 1);
+        assert_eq!(graph_task_id(&tasks_a[0]).as_deref(), Some("a2"));
+        assert_eq!(graph_task_id(&tasks_b[0]).as_deref(), Some("b1"));
+
+        cleanup_run(&pool, run_a).await;
+        cleanup_run(&pool, run_b).await;
+    }
+
+    #[tokio::test]
+    async fn test_next_pending_graph_task_for_run_is_scoped() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let run_a = Uuid::new_v4();
+        let run_b = Uuid::new_v4();
+
+        repo.ensure_run(run_a).await.unwrap();
+        repo.ensure_run(run_b).await.unwrap();
+        repo.replace_graph_tasks_for_run(
+            run_a,
+            &[
+                graph_task("dep", Some("complete"), 0, &[]),
+                graph_task("target", Some("pending"), 10, &["dep"]),
+            ],
+        )
+        .await
+        .unwrap();
+        repo.replace_graph_tasks_for_run(
+            run_b,
+            &[graph_task("target", Some("pending"), 10, &["dep"])],
+        )
+        .await
+        .unwrap();
+
+        let next_a = repo
+            .next_pending_graph_task_for_run(run_a, &[])
+            .await
+            .unwrap();
+        let next_b = repo
+            .next_pending_graph_task_for_run(run_b, &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            next_a.and_then(|task| graph_task_id(&task)).as_deref(),
+            Some("target")
+        );
+        assert!(next_b.is_none());
+
+        cleanup_run(&pool, run_a).await;
+        cleanup_run(&pool, run_b).await;
+    }
+
+    #[tokio::test]
+    async fn test_run_summary_is_scoped_and_separates_missing_status() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let run_a = Uuid::new_v4();
+        let run_b = Uuid::new_v4();
+
+        repo.ensure_run(run_a).await.unwrap();
+        repo.ensure_run(run_b).await.unwrap();
+        repo.replace_graph_tasks_for_run(
+            run_a,
+            &[
+                graph_task("a1", Some("pending"), 10, &[]),
+                graph_task("a2", Some("complete"), 0, &[]),
+                graph_task("a3", None, 0, &[]),
+            ],
+        )
+        .await
+        .unwrap();
+        repo.replace_graph_tasks_for_run(
+            run_b,
+            &[graph_task("b1", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+
+        let summary_a = repo.run_summary(run_a).await.unwrap();
+        let summary_b = repo.run_summary(run_b).await.unwrap();
+        assert_eq!(summary_a.task_count, 3);
+        assert_eq!(summary_a.status_counts.get("pending"), Some(&1));
+        assert_eq!(summary_a.status_counts.get("complete"), Some(&1));
+        assert_eq!(summary_a.missing_status_count, 1);
+        assert_eq!(summary_b.task_count, 1);
+        assert_eq!(summary_b.status_counts.get("pending"), Some(&1));
+        assert_eq!(summary_b.missing_status_count, 0);
+
+        cleanup_run(&pool, run_a).await;
+        cleanup_run(&pool, run_b).await;
     }
 
     #[tokio::test]

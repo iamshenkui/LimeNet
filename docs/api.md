@@ -47,6 +47,8 @@ http://127.0.0.1:3000
 ### `POST /api/v1/runs`
 
 创建一个 run namespace。未提供 `run_id` 时由 LimeNet 生成 UUID。
+如果请求提供了已存在的 `run_id`，LimeNet 返回已有 run，HTTP status 为 `200 OK`；
+新建成功时 HTTP status 为 `201 Created`。
 
 ```json
 {
@@ -79,6 +81,24 @@ Response:
 ### `GET /api/v1/runs/{run_id}/summary`
 
 返回单个 run 的 task 数量、状态聚合和下一个可运行 task。
+`status_counts` 只统计 payload 中显式存在的 status；缺失或 JSON null 的 status 会统计到
+`missing_status_count`，避免和真实的 `"unknown"` status 混淆。
+
+Response:
+
+```json
+{
+  "run_id": "11111111-1111-1111-1111-111111111111",
+  "task_count": 3,
+  "status_counts": {
+    "pending": 1,
+    "complete": 1
+  },
+  "missing_status_count": 1,
+  "next_pending_task_id": "US-002",
+  "updated_at": "2026-05-29T00:00:00Z"
+}
+```
 
 ### `GET /api/v1/runs/{run_id}/timeline`
 
@@ -96,6 +116,28 @@ PUT  /api/v1/runs/{run_id}/graph/tasks/{task_id}
 POST /api/v1/runs/{run_id}/graph/tasks/insert
 POST /api/v1/runs/{run_id}/graph/tasks/next_pending
 POST /api/v1/runs/{run_id}/graph/tasks/recover
+```
+
+Scoped `next_pending` 有可运行任务时返回：
+
+```json
+{
+  "run_id": "11111111-1111-1111-1111-111111111111",
+  "task": {
+    "task_id": "US-002",
+    "title": "Next task",
+    "status": "pending"
+  }
+}
+```
+
+无可运行任务时仍保留 `task` 字段，值为 `null`：
+
+```json
+{
+  "run_id": "11111111-1111-1111-1111-111111111111",
+  "task": null
+}
 ```
 
 ### `GET /api/v1/graph/tasks`

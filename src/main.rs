@@ -64,9 +64,16 @@ async fn create_run(
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
     match repo.create_run(payload).await {
-        Ok(run) => (StatusCode::CREATED, Json(run)).into_response(),
+        Ok(outcome) => {
+            let status = if outcome.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            };
+            (status, Json(outcome.run)).into_response()
+        }
         Err(err) => (
-            StatusCode::BAD_REQUEST,
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": err.to_string() })),
         )
             .into_response(),
@@ -320,7 +327,8 @@ async fn next_pending_graph_task_for_run(
     {
         Ok(Some(task)) => (StatusCode::OK, Json(json!({ "run_id": run_id, "task": task })))
             .into_response(),
-        Ok(None) => (StatusCode::OK, Json(json!({ "run_id": run_id }))).into_response(),
+        Ok(None) => (StatusCode::OK, Json(json!({ "run_id": run_id, "task": null })))
+            .into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": err.to_string() })),
