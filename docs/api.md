@@ -48,11 +48,11 @@ http://127.0.0.1:6987
 
 返回所有 run 的观察摘要。
 
-### `GET /runs/{run_id}.json`
+### `GET /runs/{run_id}/snapshot.json`
 
 返回单个 run 的完整观察快照，包括 ordered tasks、recent events、signals 与 raw graph task JSON。
 
-### `GET /runs/{run_id}/tasks/{task_id}.json`
+### `GET /runs/{run_id}/tasks/{task_id}/snapshot.json`
 
 返回单个 task 的观察详情，包括依赖状态、下游 dependents、是否为 next pending task，以及 raw graph task JSON。
 

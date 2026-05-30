@@ -207,7 +207,7 @@ AI agent 或脚本应优先读取状态 JSON：
 
 ```bash
 curl http://127.0.0.1:6988/status.json
-curl http://127.0.0.1:6988/runs/<run_id>.json
+curl http://127.0.0.1:6988/runs/<run_id>/snapshot.json
 ```
 
 `status.json` 是全局轻量摘要，不包含完整 task payload。需要某个 run 或 task 的细节时使用 scoped URL。
