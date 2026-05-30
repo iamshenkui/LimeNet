@@ -853,8 +853,11 @@ fn observe_json_router(repo: Arc<ObserveRepository>) -> Router {
     Router::new()
         .route("/status.json", get(observe_status))
         .route("/runs.json", get(observe_runs))
-        .route("/runs/{run_id}.json", get(observe_run))
-        .route("/runs/{run_id}/tasks/{task_id}.json", get(observe_task))
+        .route("/runs/{run_id}/snapshot.json", get(observe_run))
+        .route(
+            "/runs/{run_id}/tasks/{task_id}/snapshot.json",
+            get(observe_task),
+        )
         .with_state(repo)
 }
 
