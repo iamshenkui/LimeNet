@@ -424,13 +424,18 @@ impl<'a> TaskRepository<'a> {
     }
 
     pub async fn list_graph_tasks_for_graph(&self, graph_id: &str) -> sqlx::Result<Vec<Value>> {
-        let rows: Vec<(Value,)> = sqlx::query_as(
-            "SELECT task_data FROM graph_tasks WHERE graph_id = $1 ORDER BY task_order ASC"
+        let rows: Vec<(String, i32, Value)> = sqlx::query_as(
+            "SELECT task_id, task_order, task_data FROM graph_tasks WHERE graph_id = $1 ORDER BY task_order ASC"
         )
         .bind(graph_id)
         .fetch_all(self.pool)
         .await?;
-        Ok(rows.into_iter().map(|(task_data,)| task_data).collect())
+        Ok(rows
+            .into_iter()
+            .map(|(task_id, task_order, task_data)| {
+                crate::state::hash::enrich_task_with_hash(graph_id, &task_id, task_order, task_data)
+            })
+            .collect())
     }
 
     pub async fn get_graph_task(&self, task_id: &str) -> sqlx::Result<Option<Value>> {
@@ -442,14 +447,16 @@ impl<'a> TaskRepository<'a> {
         graph_id: &str,
         task_id: &str,
     ) -> sqlx::Result<Option<Value>> {
-        let row: Option<(Value,)> = sqlx::query_as(
-            "SELECT task_data FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
+        let row: Option<(String, i32, Value)> = sqlx::query_as(
+            "SELECT task_id, task_order, task_data FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
         )
         .bind(graph_id)
         .bind(task_id)
         .fetch_optional(self.pool)
         .await?;
-        Ok(row.map(|(task_data,)| task_data))
+        Ok(row.map(|(task_id, task_order, task_data)| {
+            crate::state::hash::enrich_task_with_hash(graph_id, &task_id, task_order, task_data)
+        }))
     }
 
     pub async fn replace_graph_tasks(&self, tasks: &[Value]) -> sqlx::Result<()> {
@@ -1674,6 +1681,7 @@ impl BackoffAwakener {
 mod tests {
     use super::*;
     use crate::contracts::{Payload, TaskStatus};
+    use serde_json::json;
 
     async fn test_pool() -> PgPool {
         let database_url = crate::config::resolve_database_url()
@@ -2386,5 +2394,310 @@ mod tests {
         assert!(matches!(result, Err(HeartbeatError::AgentMismatch)));
 
         repo.delete(task.task_id).await.unwrap();
+    }
+
+    // -----------------------------------------------------------------------
+    // Graph task state hash stability tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_graph_task_hash_present_on_read() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "hash-test-graph";
+
+        repo.replace_graph_tasks_for_graph(
+            graph_id,
+            &[graph_task("t1", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+
+        let tasks = repo.list_graph_tasks_for_graph(graph_id).await.unwrap();
+        assert_eq!(tasks.len(), 1);
+        let task = &tasks[0];
+        assert_eq!(task["hash_algorithm"], "sha256");
+        assert!(
+            task["state_hash"].as_str().unwrap().len() == 64,
+            "state_hash must be a 64-char hex sha256"
+        );
+
+        let single = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        assert_eq!(single["hash_algorithm"], "sha256");
+        assert_eq!(single["state_hash"], task["state_hash"]);
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_graph_task_hash_stable_across_reloads() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "hash-stable-graph";
+
+        let payload = serde_json::json!({
+            "task_id": "t1",
+            "status": "pending",
+            "priority": 10,
+            "dependencies": [],
+        });
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[payload.clone()])
+            .await
+            .unwrap();
+
+        let first_read = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let first_hash = first_read["state_hash"].as_str().unwrap().to_string();
+
+        // Reload the same logical payload
+        repo.replace_graph_tasks_for_graph(graph_id, &[payload.clone()])
+            .await
+            .unwrap();
+
+        let second_read = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let second_hash = second_read["state_hash"].as_str().unwrap().to_string();
+
+        assert_eq!(first_hash, second_hash, "hash must be stable across reloads of identical payload");
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_graph_task_hash_excludes_volatile_audit_fields() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "hash-volatile-graph";
+
+        let payload_with_audit = serde_json::json!({
+            "task_id": "t1",
+            "status": "pending",
+            "updated_at": "2024-01-01T00:00:00Z",
+            "created_at": "2024-01-01T00:00:00Z",
+        });
+
+        let payload_without_audit = serde_json::json!({
+            "task_id": "t1",
+            "status": "pending",
+        });
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[payload_with_audit.clone()])
+            .await
+            .unwrap();
+
+        let with_audit = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let hash_with = with_audit["state_hash"].as_str().unwrap().to_string();
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[payload_without_audit.clone()])
+            .await
+            .unwrap();
+
+        let without_audit = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let hash_without = without_audit["state_hash"].as_str().unwrap().to_string();
+
+        assert_eq!(
+            hash_with, hash_without,
+            "hash must ignore volatile audit fields in task_data"
+        );
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_graph_task_hash_changes_with_logical_payload() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "hash-change-graph";
+
+        repo.replace_graph_tasks_for_graph(
+            graph_id,
+            &[graph_task("t1", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+
+        let first = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let first_hash = first["state_hash"].as_str().unwrap().to_string();
+
+        // Change the status — a logical payload change
+        repo.replace_graph_tasks_for_graph(
+            graph_id,
+            &[graph_task("t1", Some("complete"), 10, &[])],
+        )
+        .await
+        .unwrap();
+
+        let second = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let second_hash = second["state_hash"].as_str().unwrap().to_string();
+
+        assert_ne!(
+            first_hash, second_hash,
+            "hash must change when logical payload changes"
+        );
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_graph_task_hash_changes_with_order() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "hash-order-graph";
+
+        repo.replace_graph_tasks_for_graph(
+            graph_id,
+            &[
+                graph_task("t1", Some("pending"), 10, &[]),
+                graph_task("t2", Some("pending"), 10, &[]),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let first = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let first_hash = first["state_hash"].as_str().unwrap().to_string();
+
+        // Swap order by replacing tasks in reverse order
+        repo.replace_graph_tasks_for_graph(
+            graph_id,
+            &[
+                graph_task("t2", Some("pending"), 10, &[]),
+                graph_task("t1", Some("pending"), 10, &[]),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let second = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let second_hash = second["state_hash"].as_str().unwrap().to_string();
+
+        assert_ne!(
+            first_hash, second_hash,
+            "hash must change when graph-scoped ordering changes"
+        );
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_graph_task_hash_stable_across_upsert_with_same_payload() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "hash-upsert-graph";
+
+        let payload = serde_json::json!({
+            "task_id": "t1",
+            "status": "pending",
+            "priority": 10,
+        });
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[payload.clone()])
+            .await
+            .unwrap();
+
+        let first = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let first_hash = first["state_hash"].as_str().unwrap().to_string();
+
+        // Upsert with identical payload
+        repo.upsert_graph_task_for_graph(graph_id, "t1", &payload)
+            .await
+            .unwrap();
+
+        let second = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let second_hash = second["state_hash"].as_str().unwrap().to_string();
+
+        assert_eq!(
+            first_hash, second_hash,
+            "hash must be stable across upsert with identical payload"
+        );
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_graph_task_hash_stable_after_client_roundtrip() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "hash-roundtrip-graph";
+
+        let payload = json!({
+            "task_id": "t1",
+            "status": "pending",
+            "priority": 10,
+        });
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[payload.clone()])
+            .await
+            .unwrap();
+
+        let first = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let first_hash = first["state_hash"].as_str().unwrap().to_string();
+
+        // Simulate a client reading the enriched response and writing it back
+        // (including the injected hash_algorithm and state_hash fields).
+        repo.upsert_graph_task_for_graph(graph_id, "t1", &first)
+            .await
+            .unwrap();
+
+        let second = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let second_hash = second["state_hash"].as_str().unwrap().to_string();
+
+        assert_eq!(
+            first_hash, second_hash,
+            "hash must be stable even when client round-trips the enriched response"
+        );
+
+        cleanup_graph_tasks(&pool, graph_id).await;
     }
 }
