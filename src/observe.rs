@@ -181,6 +181,16 @@ struct GraphTaskRow {
     updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct SummaryTaskRow {
+    run_id: Uuid,
+    task_id: String,
+    task_order: i32,
+    status: Option<String>,
+    dependencies: Option<Value>,
+    updated_at: DateTime<Utc>,
+}
+
 impl ObserveRepository {
     pub fn new(pool: PgPool, config: ObserveConfig) -> Self {
         Self { pool, config }
@@ -225,10 +235,30 @@ impl ObserveRepository {
         .fetch_all(&self.pool)
         .await?;
 
+        let task_rows: Vec<SummaryTaskRow> = sqlx::query_as(
+            r#"
+            SELECT
+                run_id,
+                task_id,
+                task_order,
+                task_data->>'status' AS status,
+                COALESCE(task_data->'dependencies', task_data->'parent_ids') AS dependencies,
+                updated_at
+            FROM graph_tasks
+            ORDER BY run_id, task_order ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut tasks_by_run: HashMap<Uuid, Vec<SummaryTaskRow>> = HashMap::new();
+        for task in task_rows {
+            tasks_by_run.entry(task.run_id).or_default().push(task);
+        }
+
         let mut summaries = Vec::with_capacity(rows.len());
         for run in rows {
-            let tasks = self.graph_task_rows(run.run_id).await?;
-            summaries.push(summarize_run(run, &tasks, observed_at));
+            let tasks = tasks_by_run.remove(&run.run_id).unwrap_or_default();
+            summaries.push(summarize_run_from_summary(run, &tasks, observed_at));
         }
         summaries.sort_by(|a, b| b.last_activity_at.cmp(&a.last_activity_at));
         Ok(summaries)
@@ -242,12 +272,9 @@ impl ObserveRepository {
         let task_rows = self.graph_task_rows(run_id).await?;
         let run = summarize_run(run_row, &task_rows, observed_at);
         let tasks = observe_tasks(run_id, &task_rows, run.next_pending_task_id.as_deref());
-        let recent_events = tasks
-            .iter()
-            .rev()
-            .take(100)
-            .map(task_event)
-            .collect::<Vec<_>>();
+        let mut recent_events = tasks.iter().map(task_event).collect::<Vec<_>>();
+        recent_events.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        recent_events.truncate(100);
         let signals = run.signals.clone();
 
         Ok(Some(RunSnapshot {
@@ -392,6 +419,110 @@ fn summarize_run(
     }
 }
 
+struct SummaryTaskState {
+    task_id: String,
+    task_order: i32,
+    status: ObservedStatus,
+    dependencies_complete: bool,
+}
+
+fn summarize_run_from_summary(
+    run: RunRow,
+    tasks: &[SummaryTaskRow],
+    observed_at: DateTime<Utc>,
+) -> RunObservationSummary {
+    let task_count = tasks.len() as i64;
+    let mut status_counts = BTreeMap::new();
+    let mut missing_status_count = 0_i64;
+    let mut unknown_status_count = 0_i64;
+    let status_by_id = tasks
+        .iter()
+        .map(|task| {
+            let (status, _) = normalize_status(task.status.as_deref());
+            (task.task_id.clone(), status.as_str().to_string())
+        })
+        .collect::<HashMap<_, _>>();
+    let known_ids = tasks
+        .iter()
+        .map(|task| task.task_id.clone())
+        .collect::<HashSet<_>>();
+
+    let mut task_states = Vec::with_capacity(tasks.len());
+    for task in tasks {
+        let (status, _) = normalize_status(task.status.as_deref());
+        match status {
+            ObservedStatus::Missing => missing_status_count += 1,
+            ObservedStatus::Unknown => {
+                unknown_status_count += 1;
+                *status_counts
+                    .entry(ObservedStatus::Unknown.as_str().to_string())
+                    .or_insert(0) += 1;
+            }
+            _ => {
+                *status_counts
+                    .entry(status.as_str().to_string())
+                    .or_insert(0) += 1;
+            }
+        }
+
+        let dependencies = dependencies_from_value(task.dependencies.as_ref());
+        let dependencies_complete = dependencies.iter().all(|dependency| {
+            known_ids.contains(dependency)
+                && status_by_id.get(dependency).map(String::as_str) == Some("COMPLETED")
+        });
+        task_states.push(SummaryTaskState {
+            task_id: task.task_id.clone(),
+            task_order: task.task_order,
+            status,
+            dependencies_complete,
+        });
+    }
+    task_states.sort_by_key(|task| task.task_order);
+
+    let next_pending_task_id = task_states
+        .iter()
+        .find(|task| {
+            matches!(task.status, ObservedStatus::Pending | ObservedStatus::Ready)
+                && task.dependencies_complete
+        })
+        .map(|task| task.task_id.clone());
+    let last_activity_at = tasks
+        .iter()
+        .map(|task| task.updated_at)
+        .max()
+        .unwrap_or(run.updated_at);
+    let incomplete_count = task_states
+        .iter()
+        .filter(|task| task.status != ObservedStatus::Completed)
+        .count();
+    let signals = run_signals_for_counts(
+        run.run_id,
+        task_count,
+        missing_status_count,
+        unknown_status_count,
+        next_pending_task_id.as_deref(),
+        incomplete_count,
+        observed_at,
+    );
+
+    RunObservationSummary {
+        run_id: run.run_id,
+        display_name: run.display_name,
+        source_kind: run.source_kind,
+        source_ref: run.source_ref,
+        status: run.status,
+        task_count,
+        status_counts,
+        missing_status_count,
+        unknown_status_count,
+        next_pending_task_id,
+        created_at: run.created_at,
+        updated_at: run.updated_at,
+        last_activity_at,
+        signals,
+    }
+}
+
 fn observe_tasks(
     run_id: Uuid,
     tasks: &[GraphTaskRow],
@@ -496,6 +627,30 @@ fn run_signals(
     tasks: &[TaskObservation],
     observed_at: DateTime<Utc>,
 ) -> Vec<Signal> {
+    let incomplete_count = tasks
+        .iter()
+        .filter(|task| task.status.normalized != "COMPLETED")
+        .count();
+    run_signals_for_counts(
+        run_id,
+        task_count,
+        missing_status_count,
+        unknown_status_count,
+        next_pending_task_id,
+        incomplete_count,
+        observed_at,
+    )
+}
+
+fn run_signals_for_counts(
+    run_id: Uuid,
+    task_count: i64,
+    missing_status_count: i64,
+    unknown_status_count: i64,
+    next_pending_task_id: Option<&str>,
+    incomplete_count: usize,
+    observed_at: DateTime<Utc>,
+) -> Vec<Signal> {
     let mut signals = Vec::new();
 
     if task_count == 0 {
@@ -531,10 +686,6 @@ fn run_signals(
         ));
     }
 
-    let incomplete_count = tasks
-        .iter()
-        .filter(|task| task.status.normalized != "COMPLETED")
-        .count();
     if incomplete_count > 0 && next_pending_task_id.is_none() {
         signals.push(signal(
             "watch",
@@ -589,8 +740,11 @@ fn title(task: &Value) -> Option<String> {
 }
 
 fn dependencies(task: &Value) -> Vec<String> {
-    task.get("dependencies")
-        .or_else(|| task.get("parent_ids"))
+    dependencies_from_value(task.get("dependencies").or_else(|| task.get("parent_ids")))
+}
+
+fn dependencies_from_value(value: Option<&Value>) -> Vec<String> {
+    value
         .and_then(Value::as_array)
         .map(|items| {
             items
@@ -605,6 +759,7 @@ fn dependencies(task: &Value) -> Vec<String> {
 pub fn derive_next_bind_address(base: &str) -> Option<String> {
     let (host, port) = split_host_port(base)?;
     let next_port = port.checked_add(1)?;
+    let host = if host == "0.0.0.0" { "127.0.0.1" } else { host };
     Some(format!("{host}:{next_port}"))
 }
 
@@ -667,6 +822,14 @@ mod tests {
     fn derives_next_bind_address_from_port() {
         assert_eq!(
             derive_next_bind_address("127.0.0.1:6987").as_deref(),
+            Some("127.0.0.1:6988")
+        );
+    }
+
+    #[test]
+    fn derived_observe_bind_uses_loopback_for_unspecified_task_host() {
+        assert_eq!(
+            derive_next_bind_address("0.0.0.0:6987").as_deref(),
             Some("127.0.0.1:6988")
         );
     }

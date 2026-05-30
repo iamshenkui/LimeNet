@@ -488,6 +488,7 @@
     const drawerTitle = document.getElementById("drawer-title");
     const drawerSubtitle = document.getElementById("drawer-subtitle");
     const drawerBody = document.getElementById("drawer-body");
+    let isLoading = false;
 
     document.getElementById("refresh-button").addEventListener("click", load);
     document.getElementById("drawer-close").addEventListener("click", closeDrawer);
@@ -510,6 +511,8 @@
     }
 
     async function load() {
+      if (isLoading) return;
+      isLoading = true;
       refreshState.textContent = "refreshing";
       try {
         const snapshot = await fetchJson("/status.json");
@@ -519,6 +522,8 @@
       } catch (error) {
         content.innerHTML = `<div class="error">Unable to load observe snapshot: ${escapeHtml(error.message)}</div>`;
         refreshState.textContent = "error";
+      } finally {
+        isLoading = false;
       }
     }
 

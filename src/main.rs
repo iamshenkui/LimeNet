@@ -1,6 +1,5 @@
 pub mod config;
 pub mod contracts;
-pub mod observe;
 pub mod state;
 
 use axum::{
