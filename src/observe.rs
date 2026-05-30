@@ -142,7 +142,6 @@ pub struct TaskObservation {
     pub updated_at: DateTime<Utc>,
     pub dependencies: Vec<String>,
     pub dependency_statuses: Vec<DependencyObservation>,
-    pub dependents: Vec<String>,
     pub dependencies_complete: bool,
     pub is_next_pending: bool,
     pub raw_task: Value,
@@ -409,7 +408,6 @@ fn observe_tasks(
         .iter()
         .map(|task| task.task_id.clone())
         .collect::<HashSet<_>>();
-    let dependents_by_id = dependents_by_id(tasks);
 
     let mut observations = Vec::with_capacity(tasks.len());
     for task in tasks {
@@ -440,10 +438,6 @@ fn observe_tasks(
             updated_at: task.updated_at,
             dependencies,
             dependency_statuses,
-            dependents: dependents_by_id
-                .get(&task.task_id)
-                .cloned()
-                .unwrap_or_default(),
             dependencies_complete,
             is_next_pending: next_pending_task_id == Some(task.task_id.as_str()),
             raw_task: task.task_data.clone(),
@@ -606,19 +600,6 @@ fn dependencies(task: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn dependents_by_id(tasks: &[GraphTaskRow]) -> HashMap<String, Vec<String>> {
-    let mut dependents: HashMap<String, Vec<String>> = HashMap::new();
-    for task in tasks {
-        for dependency in dependencies(&task.task_data) {
-            dependents
-                .entry(dependency)
-                .or_default()
-                .push(task.task_id.clone());
-        }
-    }
-    dependents
 }
 
 pub fn derive_next_bind_address(base: &str) -> Option<String> {

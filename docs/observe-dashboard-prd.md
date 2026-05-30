@@ -101,7 +101,6 @@ Task detail includes:
 - raw status
 - `updated_at`
 - dependencies
-- inferred downstream dependents
 - whether dependencies are complete
 - whether the task is the next pending task
 - raw graph task JSON
@@ -118,4 +117,3 @@ Signals:
 - `NO_TASKS`
 
 Elapsed idle time may be displayed as context, but it is not a high-confidence risk by itself.
-

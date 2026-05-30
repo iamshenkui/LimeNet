@@ -479,7 +479,6 @@
             <div>Status</div><div class="mono">${escapeHtml(task.status.normalized)} ${task.status.raw ? `(${escapeHtml(task.status.raw)})` : ""}</div>
             <div>Updated</div><div>${escapeHtml(fmtTime(task.updated_at))}</div>
             <div>Dependencies</div><div class="mono">${escapeHtml(task.dependencies.join(", ") || "none")}</div>
-            <div>Dependents</div><div class="mono">${escapeHtml(task.dependents.join(", ") || "none")}</div>
             <div>Dependencies complete</div><div>${task.dependencies_complete ? "yes" : "no"}</div>
             <div>Next pending</div><div>${task.is_next_pending ? "yes" : "no"}</div>
           </div>
