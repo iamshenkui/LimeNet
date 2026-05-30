@@ -423,11 +423,11 @@ impl<'a> TaskRepository<'a> {
         self.list_graph_tasks_for_run(DEFAULT_RUN_ID).await
     }
 
-    pub async fn list_graph_tasks_for_run(&self, run_id: Uuid) -> sqlx::Result<Vec<Value>> {
+    pub async fn list_graph_tasks_for_graph(&self, graph_id: &str) -> sqlx::Result<Vec<Value>> {
         let rows: Vec<(Value,)> = sqlx::query_as(
-            "SELECT task_data FROM graph_tasks WHERE run_id = $1 ORDER BY task_order ASC"
+            "SELECT task_data FROM graph_tasks WHERE graph_id = $1 ORDER BY task_order ASC"
         )
-        .bind(run_id)
+        .bind(graph_id)
         .fetch_all(self.pool)
         .await?;
         Ok(rows.into_iter().map(|(task_data,)| task_data).collect())
@@ -437,15 +437,15 @@ impl<'a> TaskRepository<'a> {
         self.get_graph_task_for_run(DEFAULT_RUN_ID, task_id).await
     }
 
-    pub async fn get_graph_task_for_run(
+    pub async fn get_graph_task_for_graph(
         &self,
-        run_id: Uuid,
+        graph_id: &str,
         task_id: &str,
     ) -> sqlx::Result<Option<Value>> {
         let row: Option<(Value,)> = sqlx::query_as(
-            "SELECT task_data FROM graph_tasks WHERE run_id = $1 AND task_id = $2"
+            "SELECT task_data FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
         )
-        .bind(run_id)
+        .bind(graph_id)
         .bind(task_id)
         .fetch_optional(self.pool)
         .await?;
@@ -456,15 +456,14 @@ impl<'a> TaskRepository<'a> {
         self.replace_graph_tasks_for_run(DEFAULT_RUN_ID, tasks).await
     }
 
-    pub async fn replace_graph_tasks_for_run(
+    pub async fn replace_graph_tasks_for_graph(
         &self,
-        run_id: Uuid,
+        graph_id: &str,
         tasks: &[Value],
     ) -> sqlx::Result<()> {
-        self.ensure_run(run_id).await?;
         let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM graph_tasks WHERE run_id = $1")
-            .bind(run_id)
+        sqlx::query("DELETE FROM graph_tasks WHERE graph_id = $1")
+            .bind(graph_id)
             .execute(&mut *tx)
             .await?;
 
@@ -474,11 +473,11 @@ impl<'a> TaskRepository<'a> {
             })?;
             sqlx::query(
                 r#"
-                INSERT INTO graph_tasks (run_id, task_id, task_order, task_data)
+                INSERT INTO graph_tasks (graph_id, task_id, task_order, task_data)
                 VALUES ($1, $2, $3, $4)
                 "#,
             )
-            .bind(run_id)
+            .bind(graph_id)
             .bind(&task_id)
             .bind(index as i32)
             .bind(task)
@@ -494,17 +493,16 @@ impl<'a> TaskRepository<'a> {
         self.upsert_graph_task_for_run(DEFAULT_RUN_ID, task_id, task).await
     }
 
-    pub async fn upsert_graph_task_for_run(
+    pub async fn upsert_graph_task_for_graph(
         &self,
-        run_id: Uuid,
+        graph_id: &str,
         task_id: &str,
         task: &Value,
     ) -> sqlx::Result<()> {
-        self.ensure_run(run_id).await?;
         let existing_order: Option<(i32,)> = sqlx::query_as(
-            "SELECT task_order FROM graph_tasks WHERE run_id = $1 AND task_id = $2"
+            "SELECT task_order FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
         )
-        .bind(run_id)
+        .bind(graph_id)
         .bind(task_id)
         .fetch_optional(self.pool)
         .await?;
@@ -513,9 +511,9 @@ impl<'a> TaskRepository<'a> {
             Some((order,)) => order,
             None => {
                 let next_order: (Option<i32>,) = sqlx::query_as(
-                    "SELECT MAX(task_order) FROM graph_tasks WHERE run_id = $1"
+                    "SELECT MAX(task_order) FROM graph_tasks WHERE graph_id = $1"
                 )
-                .bind(run_id)
+                .bind(graph_id)
                 .fetch_one(self.pool)
                 .await?;
                 next_order.0.unwrap_or(-1) + 1
@@ -524,13 +522,13 @@ impl<'a> TaskRepository<'a> {
 
         sqlx::query(
             r#"
-            INSERT INTO graph_tasks (run_id, task_id, task_order, task_data)
+            INSERT INTO graph_tasks (graph_id, task_id, task_order, task_data)
             VALUES ($1, $2, $3, $4)
-            ON CONFLICT (run_id, task_id)
+            ON CONFLICT (graph_id, task_id)
             DO UPDATE SET task_data = EXCLUDED.task_data
             "#,
         )
-        .bind(run_id)
+        .bind(graph_id)
         .bind(task_id)
         .bind(task_order)
         .bind(task)
@@ -548,19 +546,18 @@ impl<'a> TaskRepository<'a> {
             .await
     }
 
-    pub async fn insert_graph_tasks_after_for_run(
+    pub async fn insert_graph_tasks_after_for_graph(
         &self,
-        run_id: Uuid,
+        graph_id: &str,
         anchor_task_id: &str,
         tasks: &[Value],
     ) -> Result<(), GraphTaskInsertError> {
-        self.ensure_run(run_id).await?;
         let mut tx = self.pool.begin().await?;
 
         let anchor_row: Option<(i32,)> = sqlx::query_as(
-            "SELECT task_order FROM graph_tasks WHERE run_id = $1 AND task_id = $2"
+            "SELECT task_order FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
         )
-        .bind(run_id)
+        .bind(graph_id)
         .bind(anchor_task_id)
         .fetch_optional(&mut *tx)
         .await?;
@@ -576,9 +573,9 @@ impl<'a> TaskRepository<'a> {
             };
 
             let exists: Option<(String,)> = sqlx::query_as(
-                "SELECT task_id FROM graph_tasks WHERE run_id = $1 AND task_id = $2"
+                "SELECT task_id FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
             )
-            .bind(run_id)
+            .bind(graph_id)
             .bind(&task_id)
             .fetch_optional(&mut *tx)
             .await?;
@@ -589,10 +586,10 @@ impl<'a> TaskRepository<'a> {
         }
 
         sqlx::query(
-            "UPDATE graph_tasks SET task_order = task_order + $1 WHERE run_id = $2 AND task_order > $3"
+            "UPDATE graph_tasks SET task_order = task_order + $1 WHERE graph_id = $2 AND task_order > $3"
         )
         .bind(tasks.len() as i32)
-        .bind(run_id)
+        .bind(graph_id)
         .bind(anchor_order)
         .execute(&mut *tx)
         .await?;
@@ -601,11 +598,11 @@ impl<'a> TaskRepository<'a> {
             let task_id = graph_task_id(task).ok_or(GraphTaskInsertError::InvalidTaskPayload)?;
             sqlx::query(
                 r#"
-                INSERT INTO graph_tasks (run_id, task_id, task_order, task_data)
+                INSERT INTO graph_tasks (graph_id, task_id, task_order, task_data)
                 VALUES ($1, $2, $3, $4)
                 "#,
             )
-            .bind(run_id)
+            .bind(graph_id)
             .bind(&task_id)
             .bind(anchor_order + 1 + index as i32)
             .bind(task)
@@ -625,12 +622,12 @@ impl<'a> TaskRepository<'a> {
             .await
     }
 
-    pub async fn next_pending_graph_task_for_run(
+    pub async fn next_pending_graph_task_for_graph(
         &self,
-        run_id: Uuid,
+        graph_id: &str,
         exclude_task_ids: &[String],
     ) -> sqlx::Result<Option<Value>> {
-        let tasks = self.list_graph_tasks_for_run(run_id).await?;
+        let tasks = self.list_graph_tasks_for_graph(graph_id).await?;
         let excluded: HashSet<&str> = exclude_task_ids.iter().map(String::as_str).collect();
         let completed_ids: HashSet<String> = tasks
             .iter()
@@ -669,11 +666,11 @@ impl<'a> TaskRepository<'a> {
             .await
     }
 
-    pub async fn recover_in_progress_graph_tasks_for_run(
+    pub async fn recover_in_progress_graph_tasks_for_graph(
         &self,
-        run_id: Uuid,
+        graph_id: &str,
     ) -> sqlx::Result<i64> {
-        let tasks = self.list_graph_tasks_for_run(run_id).await?;
+        let tasks = self.list_graph_tasks_for_graph(graph_id).await?;
         let mut recovered = 0_i64;
         let mut tx = self.pool.begin().await?;
 
@@ -688,10 +685,10 @@ impl<'a> TaskRepository<'a> {
                 sqlx::Error::Protocol("graph task payload missing non-empty task_id".into())
             })?;
             sqlx::query(
-                "UPDATE graph_tasks SET task_data = $1 WHERE run_id = $2 AND task_id = $3"
+                "UPDATE graph_tasks SET task_data = $1 WHERE graph_id = $2 AND task_id = $3"
             )
             .bind(&task)
-            .bind(run_id)
+            .bind(graph_id)
             .bind(task_id)
             .execute(&mut *tx)
             .await?;
@@ -700,6 +697,203 @@ impl<'a> TaskRepository<'a> {
 
         tx.commit().await?;
         Ok(recovered)
+    }
+
+    // Backward-compatible run-scoped wrappers that delegate to graph-scoped
+    // implementations using the run_id as the graph identifier.
+    fn run_id_to_graph_id(run_id: Uuid) -> String {
+        if run_id == DEFAULT_RUN_ID {
+            "default".to_string()
+        } else {
+            run_id.to_string()
+        }
+    }
+
+    pub async fn list_graph_tasks_for_run(
+        &self,
+        run_id: Uuid,
+    ) -> sqlx::Result<Vec<Value>> {
+        self.list_graph_tasks_for_graph(&Self::run_id_to_graph_id(run_id)).await
+    }
+
+    pub async fn get_graph_task_for_run(
+        &self,
+        run_id: Uuid,
+        task_id: &str,
+    ) -> sqlx::Result<Option<Value>> {
+        self.get_graph_task_for_graph(&Self::run_id_to_graph_id(run_id), task_id)
+            .await
+    }
+
+    pub async fn replace_graph_tasks_for_run(
+        &self,
+        run_id: Uuid,
+        tasks: &[Value],
+    ) -> sqlx::Result<()> {
+        self.ensure_run(run_id).await?;
+        let graph_id = Self::run_id_to_graph_id(run_id);
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM graph_tasks WHERE graph_id = $1")
+            .bind(&graph_id)
+            .execute(&mut *tx)
+            .await?;
+
+        for (index, task) in tasks.iter().enumerate() {
+            let task_id = graph_task_id(task).ok_or_else(|| {
+                sqlx::Error::Protocol("graph task payload missing non-empty task_id".into())
+            })?;
+            sqlx::query(
+                r#"
+                INSERT INTO graph_tasks (run_id, graph_id, task_id, task_order, task_data)
+                VALUES ($1, $2, $3, $4, $5)
+                "#,
+            )
+            .bind(run_id)
+            .bind(&graph_id)
+            .bind(&task_id)
+            .bind(index as i32)
+            .bind(task)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn upsert_graph_task_for_run(
+        &self,
+        run_id: Uuid,
+        task_id: &str,
+        task: &Value,
+    ) -> sqlx::Result<()> {
+        self.ensure_run(run_id).await?;
+        let graph_id = Self::run_id_to_graph_id(run_id);
+        let existing_order: Option<(i32,)> = sqlx::query_as(
+            "SELECT task_order FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
+        )
+        .bind(&graph_id)
+        .bind(task_id)
+        .fetch_optional(self.pool)
+        .await?;
+
+        let task_order = match existing_order {
+            Some((order,)) => order,
+            None => {
+                let next_order: (Option<i32>,) = sqlx::query_as(
+                    "SELECT MAX(task_order) FROM graph_tasks WHERE graph_id = $1"
+                )
+                .bind(&graph_id)
+                .fetch_one(self.pool)
+                .await?;
+                next_order.0.unwrap_or(-1) + 1
+            }
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO graph_tasks (run_id, graph_id, task_id, task_order, task_data)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (graph_id, task_id)
+            DO UPDATE SET task_data = EXCLUDED.task_data
+            "#,
+        )
+        .bind(run_id)
+        .bind(&graph_id)
+        .bind(task_id)
+        .bind(task_order)
+        .bind(task)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn insert_graph_tasks_after_for_run(
+        &self,
+        run_id: Uuid,
+        anchor_task_id: &str,
+        tasks: &[Value],
+    ) -> Result<(), GraphTaskInsertError> {
+        self.ensure_run(run_id).await?;
+        let graph_id = Self::run_id_to_graph_id(run_id);
+        let mut tx = self.pool.begin().await?;
+
+        let anchor_row: Option<(i32,)> = sqlx::query_as(
+            "SELECT task_order FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
+        )
+        .bind(&graph_id)
+        .bind(anchor_task_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((anchor_order,)) = anchor_row else {
+            tx.commit().await?;
+            return Err(GraphTaskInsertError::UnknownAnchor(anchor_task_id.to_string()));
+        };
+
+        for task in tasks {
+            let Some(task_id) = graph_task_id(task) else {
+                tx.commit().await?;
+                return Err(GraphTaskInsertError::InvalidTaskPayload);
+            };
+
+            let exists: Option<(String,)> = sqlx::query_as(
+                "SELECT task_id FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
+            )
+            .bind(&graph_id)
+            .bind(&task_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if exists.is_some() {
+                tx.commit().await?;
+                return Err(GraphTaskInsertError::DuplicateTask(task_id));
+            }
+        }
+
+        sqlx::query(
+            "UPDATE graph_tasks SET task_order = task_order + $1 WHERE graph_id = $2 AND task_order > $3"
+        )
+        .bind(tasks.len() as i32)
+        .bind(&graph_id)
+        .bind(anchor_order)
+        .execute(&mut *tx)
+        .await?;
+
+        for (index, task) in tasks.iter().enumerate() {
+            let task_id = graph_task_id(task).ok_or(GraphTaskInsertError::InvalidTaskPayload)?;
+            sqlx::query(
+                r#"
+                INSERT INTO graph_tasks (run_id, graph_id, task_id, task_order, task_data)
+                VALUES ($1, $2, $3, $4, $5)
+                "#,
+            )
+            .bind(run_id)
+            .bind(&graph_id)
+            .bind(&task_id)
+            .bind(anchor_order + 1 + index as i32)
+            .bind(task)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn next_pending_graph_task_for_run(
+        &self,
+        run_id: Uuid,
+        exclude_task_ids: &[String],
+    ) -> sqlx::Result<Option<Value>> {
+        self.next_pending_graph_task_for_graph(&Self::run_id_to_graph_id(run_id), exclude_task_ids)
+            .await
+    }
+
+    pub async fn recover_in_progress_graph_tasks_for_run(
+        &self,
+        run_id: Uuid,
+    ) -> sqlx::Result<i64> {
+        self.recover_in_progress_graph_tasks_for_graph(&Self::run_id_to_graph_id(run_id))
+            .await
     }
 
     pub async fn run_summary(
@@ -1617,6 +1811,214 @@ mod tests {
 
         cleanup_run(&pool, run_a).await;
         cleanup_run(&pool, run_b).await;
+    }
+
+    async fn cleanup_graph_tasks(pool: &PgPool, graph_id: &str) {
+        let _ = sqlx::query("DELETE FROM graph_tasks WHERE graph_id = $1")
+            .bind(graph_id)
+            .execute(pool)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_graph_scoped_tasks_allow_same_task_id_and_order() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_a = "graph-a";
+        let graph_b = "graph-b";
+
+        repo.replace_graph_tasks_for_graph(
+            graph_a,
+            &[graph_task("same", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+        repo.replace_graph_tasks_for_graph(
+            graph_b,
+            &[graph_task("same", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+
+        let tasks_a = repo.list_graph_tasks_for_graph(graph_a).await.unwrap();
+        let tasks_b = repo.list_graph_tasks_for_graph(graph_b).await.unwrap();
+        assert_eq!(tasks_a.len(), 1);
+        assert_eq!(tasks_b.len(), 1);
+        assert_eq!(graph_task_id(&tasks_a[0]).as_deref(), Some("same"));
+        assert_eq!(graph_task_id(&tasks_b[0]).as_deref(), Some("same"));
+
+        cleanup_graph_tasks(&pool, graph_a).await;
+        cleanup_graph_tasks(&pool, graph_b).await;
+    }
+
+    #[tokio::test]
+    async fn test_replace_graph_tasks_for_graph_only_deletes_target_graph() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_a = "graph-a";
+        let graph_b = "graph-b";
+
+        repo.replace_graph_tasks_for_graph(
+            graph_a,
+            &[graph_task("a1", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+        repo.replace_graph_tasks_for_graph(
+            graph_b,
+            &[graph_task("b1", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+        repo.replace_graph_tasks_for_graph(
+            graph_a,
+            &[graph_task("a2", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+
+        let tasks_a = repo.list_graph_tasks_for_graph(graph_a).await.unwrap();
+        let tasks_b = repo.list_graph_tasks_for_graph(graph_b).await.unwrap();
+        assert_eq!(tasks_a.len(), 1);
+        assert_eq!(tasks_b.len(), 1);
+        assert_eq!(graph_task_id(&tasks_a[0]).as_deref(), Some("a2"));
+        assert_eq!(graph_task_id(&tasks_b[0]).as_deref(), Some("b1"));
+
+        cleanup_graph_tasks(&pool, graph_a).await;
+        cleanup_graph_tasks(&pool, graph_b).await;
+    }
+
+    #[tokio::test]
+    async fn test_next_pending_graph_task_for_graph_is_scoped() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_a = "graph-a";
+        let graph_b = "graph-b";
+
+        repo.replace_graph_tasks_for_graph(
+            graph_a,
+            &[
+                graph_task("dep", Some("complete"), 0, &[]),
+                graph_task("target", Some("pending"), 10, &["dep"]),
+            ],
+        )
+        .await
+        .unwrap();
+        repo.replace_graph_tasks_for_graph(
+            graph_b,
+            &[graph_task("target", Some("pending"), 10, &["dep"])],
+        )
+        .await
+        .unwrap();
+
+        let next_a = repo
+            .next_pending_graph_task_for_graph(graph_a, &[])
+            .await
+            .unwrap();
+        let next_b = repo
+            .next_pending_graph_task_for_graph(graph_b, &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            next_a.and_then(|task| graph_task_id(&task)).as_deref(),
+            Some("target")
+        );
+        assert!(next_b.is_none());
+
+        cleanup_graph_tasks(&pool, graph_a).await;
+        cleanup_graph_tasks(&pool, graph_b).await;
+    }
+
+    #[tokio::test]
+    async fn test_insert_graph_tasks_after_for_graph_is_scoped() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_a = "graph-a";
+        let graph_b = "graph-b";
+
+        repo.replace_graph_tasks_for_graph(
+            graph_a,
+            &[
+                graph_task("a1", Some("pending"), 10, &[]),
+                graph_task("a2", Some("pending"), 10, &[]),
+            ],
+        )
+        .await
+        .unwrap();
+        repo.replace_graph_tasks_for_graph(
+            graph_b,
+            &[graph_task("b1", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+
+        repo.insert_graph_tasks_after_for_graph(
+            graph_a,
+            "a1",
+            &[graph_task("a1-inserted", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+
+        let tasks_a = repo.list_graph_tasks_for_graph(graph_a).await.unwrap();
+        let tasks_b = repo.list_graph_tasks_for_graph(graph_b).await.unwrap();
+        assert_eq!(tasks_a.len(), 3);
+        assert_eq!(tasks_b.len(), 1);
+        let ids_a: Vec<_> = tasks_a.iter().filter_map(graph_task_id).collect();
+        assert_eq!(ids_a, vec!["a1", "a1-inserted", "a2"]);
+
+        cleanup_graph_tasks(&pool, graph_a).await;
+        cleanup_graph_tasks(&pool, graph_b).await;
+    }
+
+    #[tokio::test]
+    async fn test_upsert_graph_task_for_graph_preserves_order() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_a = "graph-a";
+        let graph_b = "graph-b";
+
+        repo.replace_graph_tasks_for_graph(
+            graph_a,
+            &[graph_task("a1", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+        repo.replace_graph_tasks_for_graph(
+            graph_b,
+            &[graph_task("b1", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+
+        // Upsert existing task in graph_a
+        repo.upsert_graph_task_for_graph(
+            graph_a,
+            "a1",
+            &graph_task("a1", Some("complete"), 10, &[]),
+        )
+        .await
+        .unwrap();
+
+        // Upsert new task in graph_a
+        repo.upsert_graph_task_for_graph(
+            graph_a,
+            "a2",
+            &graph_task("a2", Some("pending"), 10, &[]),
+        )
+        .await
+        .unwrap();
+
+        let tasks_a = repo.list_graph_tasks_for_graph(graph_a).await.unwrap();
+        let tasks_b = repo.list_graph_tasks_for_graph(graph_b).await.unwrap();
+        assert_eq!(tasks_a.len(), 2);
+        assert_eq!(tasks_b.len(), 1);
+        assert_eq!(graph_task_id(&tasks_a[0]).as_deref(), Some("a1"));
+        assert_eq!(graph_task_id(&tasks_a[1]).as_deref(), Some("a2"));
+        assert_eq!(graph_task_status(&tasks_a[0]).as_deref(), Some("complete"));
+
+        cleanup_graph_tasks(&pool, graph_a).await;
+        cleanup_graph_tasks(&pool, graph_b).await;
     }
 
     #[tokio::test]
