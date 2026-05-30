@@ -11,6 +11,7 @@ RUN apt-get update \
 
 COPY Cargo.toml Cargo.lock README.md /app/
 COPY migrations /app/migrations
+COPY static /app/static
 COPY src /app/src
 
 RUN cargo build --release --locked
