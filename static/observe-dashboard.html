@@ -137,6 +137,93 @@
       gap: 16px;
       align-items: start;
     }
+    .main-track {
+      display: grid;
+      gap: 14px;
+      min-width: 0;
+    }
+    .graph-panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      overflow: auto;
+    }
+    .graph {
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(190px, 220px);
+      gap: 28px;
+      min-width: max-content;
+      padding: 4px;
+    }
+    .graph-column {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+    .graph-node {
+      position: relative;
+      min-height: 72px;
+      display: grid;
+      gap: 8px;
+      padding: 10px 10px 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfc;
+      cursor: pointer;
+      text-align: left;
+    }
+    .graph-node::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 3px;
+      border-radius: 8px 0 0 8px;
+      background: var(--accent);
+    }
+    .graph-node.status-IN_PROGRESS,
+    .graph-node.status-EVALUATING {
+      border-color: #86a99e;
+      box-shadow: 0 0 0 1px rgba(47, 125, 104, 0.12);
+    }
+    .graph-node.status-COMPLETED {
+      background: #f6faf8;
+      color: #315d50;
+    }
+    .graph-node.status-BACKOFF::before,
+    .graph-node.status-UNKNOWN::before,
+    .graph-node.status-MISSING::before { background: var(--warn); }
+    .graph-node:hover {
+      border-color: #aeb8c3;
+      box-shadow: 0 8px 20px rgba(24, 24, 27, 0.06);
+    }
+    .graph-node.has-deps::after {
+      content: "";
+      position: absolute;
+      left: -29px;
+      top: 50%;
+      width: 28px;
+      border-top: 1px solid var(--line);
+    }
+    .graph-id {
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .graph-title {
+      font-size: 12px;
+      line-height: 1.3;
+      font-weight: 660;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .graph-status {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--accent);
+    }
     .task-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -303,6 +390,8 @@
       .topbar, .run-head, .run-body { grid-template-columns: 1fr; }
       .statusline, .counts { justify-content: flex-start; }
       .task-grid { grid-template-columns: 1fr; }
+      .graph { grid-auto-columns: minmax(170px, 190px); gap: 20px; }
+      .graph-node.has-deps::after { left: -21px; width: 20px; }
     }
   </style>
 </head>
@@ -451,7 +540,10 @@
             <div class="counts">${counts}</div>
           </header>
           <div class="run-body">
-            <div class="task-grid">${tasks}</div>
+            <div class="main-track">
+              ${renderGraph(run, snapshot.tasks || [])}
+              <div class="task-grid">${tasks}</div>
+            </div>
             <aside class="side">
               <p class="section-title">Signals</p>
               <div class="signals">${signals}</div>
@@ -460,6 +552,56 @@
             </aside>
           </div>
         </article>
+      `;
+    }
+
+    function renderGraph(run, tasks) {
+      if (!tasks.length) return "";
+      const taskById = new Map(tasks.map((task) => [task.task_id, task]));
+      const depthMemo = new Map();
+
+      function depth(task, trail = new Set()) {
+        if (depthMemo.has(task.task_id)) return depthMemo.get(task.task_id);
+        if (trail.has(task.task_id)) return 0;
+        trail.add(task.task_id);
+        const parents = (task.dependencies || [])
+          .map((id) => taskById.get(id))
+          .filter(Boolean);
+        const value = parents.length
+          ? Math.max(...parents.map((parent) => depth(parent, new Set(trail)))) + 1
+          : 0;
+        depthMemo.set(task.task_id, value);
+        return value;
+      }
+
+      const columns = new Map();
+      for (const task of tasks) {
+        const level = depth(task);
+        if (!columns.has(level)) columns.set(level, []);
+        columns.get(level).push(task);
+      }
+
+      const columnsHtml = [...columns.keys()].sort((a, b) => a - b).map((level) => {
+        const nodes = columns.get(level)
+          .sort((a, b) => a.task_order - b.task_order)
+          .map((task) => {
+            const hasKnownDeps = (task.dependencies || []).some((id) => taskById.has(id));
+            return `
+              <button class="graph-node status-${escapeHtml(task.status.normalized)} ${hasKnownDeps ? "has-deps" : ""}" type="button" data-task-url="/runs/${run.run_id}/tasks/${encodeURIComponent(task.task_id)}.json">
+                <span class="graph-id mono truncate">${escapeHtml(task.task_id)}</span>
+                <span class="graph-title">${escapeHtml(task.title || task.task_id)}</span>
+                <span class="graph-status">${escapeHtml(task.status.normalized)}</span>
+              </button>
+            `;
+          }).join("");
+        return `<div class="graph-column">${nodes}</div>`;
+      }).join("");
+
+      return `
+        <section class="graph-panel">
+          <p class="section-title">Dependency Graph</p>
+          <div class="graph">${columnsHtml}</div>
+        </section>
       `;
     }
 
