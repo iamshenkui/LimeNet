@@ -58,10 +58,11 @@ struct RunSummaryQuery {
 
 async fn list_graph_tasks(
     State(state): State<Arc<AppState>>,
+    Path(graph_id): Path<String>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.list_graph_tasks().await {
-        Ok(tasks) => (StatusCode::OK, Json(json!({ "tasks": tasks }))).into_response(),
+    match repo.list_graph_tasks_for_graph(&graph_id).await {
+        Ok(tasks) => (StatusCode::OK, Json(json!({ "graph_id": graph_id, "tasks": tasks }))).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": err.to_string() })),
@@ -253,12 +254,12 @@ async fn replace_graph_tasks_for_run(
 
 async fn get_graph_task(
     State(state): State<Arc<AppState>>,
-    Path(task_id): Path<String>,
+    Path((graph_id, task_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.get_graph_task(&task_id).await {
+    match repo.get_graph_task_for_graph(&graph_id, &task_id).await {
         Ok(Some(task)) => (StatusCode::OK, Json(task)).into_response(),
-        Ok(None) => (StatusCode::OK, Json(json!({ "status": "not_found" }))).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": err.to_string() })),
@@ -379,11 +380,12 @@ async fn recover_graph_tasks_for_run(
 
 async fn replace_graph_tasks(
     State(state): State<Arc<AppState>>,
+    Path(graph_id): Path<String>,
     Json(payload): Json<GraphTasksPayload>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.replace_graph_tasks(&payload.tasks).await {
-        Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
+    match repo.replace_graph_tasks_for_graph(&graph_id, &payload.tasks).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "graph_id": graph_id }))).into_response(),
         Err(err) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": err.to_string() })),
@@ -394,12 +396,12 @@ async fn replace_graph_tasks(
 
 async fn upsert_graph_task(
     State(state): State<Arc<AppState>>,
-    Path(task_id): Path<String>,
+    Path((graph_id, task_id)): Path<(String, String)>,
     Json(task): Json<Value>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.upsert_graph_task(&task_id, &task).await {
-        Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
+    match repo.upsert_graph_task_for_graph(&graph_id, &task_id, &task).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "graph_id": graph_id }))).into_response(),
         Err(err) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": err.to_string() })),
@@ -410,11 +412,15 @@ async fn upsert_graph_task(
 
 async fn insert_graph_tasks_after(
     State(state): State<Arc<AppState>>,
+    Path(graph_id): Path<String>,
     Json(payload): Json<GraphInsertPayload>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.insert_graph_tasks_after(&payload.anchor_task_id, &payload.tasks).await {
-        Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
+    match repo
+        .insert_graph_tasks_after_for_graph(&graph_id, &payload.anchor_task_id, &payload.tasks)
+        .await
+    {
+        Ok(()) => (StatusCode::OK, Json(json!({ "graph_id": graph_id }))).into_response(),
         Err(GraphTaskInsertError::UnknownAnchor(task_id)) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": format!("Unknown task: {task_id}") })),
@@ -440,15 +446,19 @@ async fn insert_graph_tasks_after(
 
 async fn next_pending_graph_task(
     State(state): State<Arc<AppState>>,
+    Path(graph_id): Path<String>,
     request: Option<Json<GraphNextPendingRequest>>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
     let exclude_task_ids = request
         .map(|Json(body)| body.exclude_task_ids)
         .unwrap_or_default();
-    match repo.next_pending_graph_task(&exclude_task_ids).await {
-        Ok(Some(task)) => (StatusCode::OK, Json(json!({ "task": task }))).into_response(),
-        Ok(None) => (StatusCode::OK, Json(json!({}))).into_response(),
+    match repo
+        .next_pending_graph_task_for_graph(&graph_id, &exclude_task_ids)
+        .await
+    {
+        Ok(Some(task)) => (StatusCode::OK, Json(json!({ "graph_id": graph_id, "task": task }))).into_response(),
+        Ok(None) => (StatusCode::OK, Json(json!({ "graph_id": graph_id, "task": null }))).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": err.to_string() })),
@@ -459,12 +469,48 @@ async fn next_pending_graph_task(
 
 async fn recover_graph_tasks(
     State(state): State<Arc<AppState>>,
+    Path(graph_id): Path<String>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.recover_in_progress_graph_tasks().await {
+    match repo.recover_in_progress_graph_tasks_for_graph(&graph_id).await {
         Ok(recovered_count) => (
             StatusCode::OK,
-            Json(json!({ "recovered_count": recovered_count })),
+            Json(json!({ "graph_id": graph_id, "recovered_count": recovered_count })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_graph_task(
+    State(state): State<Arc<AppState>>,
+    Path((graph_id, task_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.delete_graph_task_for_graph(&graph_id, &task_id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_all_graph_tasks(
+    State(state): State<Arc<AppState>>,
+    Path(graph_id): Path<String>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.delete_graph_tasks_for_graph(&graph_id).await {
+        Ok(deleted_count) => (
+            StatusCode::OK,
+            Json(json!({ "graph_id": graph_id, "deleted_count": deleted_count })),
         )
             .into_response(),
         Err(err) => (
@@ -847,11 +893,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/v1/runs/{run_id}/graph/tasks/{task_id}",
             get(get_graph_task_for_run).put(upsert_graph_task_for_run),
         )
-        .route("/api/v1/graph/tasks", get(list_graph_tasks).post(replace_graph_tasks))
-        .route("/api/v1/graph/tasks/insert", post(insert_graph_tasks_after))
-        .route("/api/v1/graph/tasks/next_pending", post(next_pending_graph_task))
-        .route("/api/v1/graph/tasks/recover", post(recover_graph_tasks))
-        .route("/api/v1/graph/tasks/{task_id}", get(get_graph_task).put(upsert_graph_task))
+        .route(
+            "/api/v1/graphs/{graph_id}/tasks",
+            get(list_graph_tasks)
+                .post(replace_graph_tasks)
+                .delete(delete_all_graph_tasks),
+        )
+        .route("/api/v1/graphs/{graph_id}/tasks/insert", post(insert_graph_tasks_after))
+        .route(
+            "/api/v1/graphs/{graph_id}/tasks/next_pending",
+            post(next_pending_graph_task),
+        )
+        .route(
+            "/api/v1/graphs/{graph_id}/tasks/recover",
+            post(recover_graph_tasks),
+        )
+        .route(
+            "/api/v1/graphs/{graph_id}/tasks/{task_id}",
+            get(get_graph_task).put(upsert_graph_task).delete(delete_graph_task),
+        )
         .route("/api/v1/tasks/batch", post(create_tasks_batch))
         .route("/api/v1/tasks/claim", post(claim_task))
         .route("/api/v1/tasks/{task_id}/heartbeat", post(heartbeat_task))

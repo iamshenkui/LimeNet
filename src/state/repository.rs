@@ -666,6 +666,34 @@ impl<'a> TaskRepository<'a> {
             .await
     }
 
+    pub async fn delete_graph_task_for_graph(
+        &self,
+        graph_id: &str,
+        task_id: &str,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            "DELETE FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
+        )
+        .bind(graph_id)
+        .bind(task_id)
+        .execute(self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn delete_graph_tasks_for_graph(
+        &self,
+        graph_id: &str,
+    ) -> sqlx::Result<i64> {
+        let result = sqlx::query(
+            "DELETE FROM graph_tasks WHERE graph_id = $1"
+        )
+        .bind(graph_id)
+        .execute(self.pool)
+        .await?;
+        Ok(result.rows_affected() as i64)
+    }
+
     pub async fn recover_in_progress_graph_tasks_for_graph(
         &self,
         graph_id: &str,

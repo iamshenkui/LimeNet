@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Graph task API 路由从 `/api/v1/graph/tasks/*` 迁移到 `/api/v1/graphs/{graph_id}/tasks/*`，所有 list、get、upsert、delete、ordering 路径现在要求显式 `graph_id`
+- 移除旧的全局 graph task 端点的静默 default run 回退行为；未提供 `graph_id` 的请求不再执行无命名空间的全局查找
+- 新增 `DELETE /api/v1/graphs/{graph_id}/tasks/{task_id}` 端点，用于删除单个 graph task
+- 新增 `DELETE /api/v1/graphs/{graph_id}/tasks` 端点，用于清空整个 graph
+- run-scoped API（`/api/v1/runs/{run_id}/graph/tasks/*`）继续通过 `run_id` → `graph_id` 映射提供向后兼容，其行为明确且受 run 存在性校验保护
+
 ## [0.2.0] - 2026-05-17
 
 ### Added

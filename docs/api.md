@@ -40,7 +40,7 @@ http://127.0.0.1:3000
 
 以下接口服务于 `meta-agent` 的 `TaskGraphBackend` / `LocalLimeNetStateBackend` 兼容层。它们保存的是 meta-agent 的完整 task graph payload，使用字符串 `task_id`，并与 LimeNet 原生 UUID worker task API 分开存储。
 
-未带 `run_id` 的兼容接口会映射到固定 default run：`00000000-0000-0000-0000-000000000000`。新客户端应优先使用下面的 run-scoped API，避免多个任务图在同一个服务内互相覆盖。
+Graph-scoped API 要求显式提供 `graph_id` 路径参数。所有读写都限制在指定 graph 命名空间内，不再执行无命名空间的全局查找。run-scoped API（`/api/v1/runs/{run_id}/graph/tasks/*`）继续通过将 `run_id` 映射为 `graph_id` 提供向后兼容。
 
 ## Run-scoped Graph Task API
 
@@ -144,86 +144,32 @@ Scoped `next_pending` 有可运行任务时返回：
 }
 ```
 
-### `GET /api/v1/graph/tasks`
+### Graph-scoped endpoints
 
-按 `task_order ASC` 返回当前 meta-agent task graph。
+以下 endpoint 要求显式 `graph_id`，所有读写都限制在指定 graph 内：
 
-Response:
+```text
+GET    /api/v1/graphs/{graph_id}/tasks
+POST   /api/v1/graphs/{graph_id}/tasks
+DELETE /api/v1/graphs/{graph_id}/tasks
+GET    /api/v1/graphs/{graph_id}/tasks/{task_id}
+PUT    /api/v1/graphs/{graph_id}/tasks/{task_id}
+DELETE /api/v1/graphs/{graph_id}/tasks/{task_id}
+POST   /api/v1/graphs/{graph_id}/tasks/insert
+POST   /api/v1/graphs/{graph_id}/tasks/next_pending
+POST   /api/v1/graphs/{graph_id}/tasks/recover
+```
+
+Graph-scoped `get` 未找到 task 时返回 `404 Not Found`。
+
+`DELETE /api/v1/graphs/{graph_id}/tasks` 删除该 graph 下全部任务，返回 `deleted_count`。
+`DELETE /api/v1/graphs/{graph_id}/tasks/{task_id}` 删除单个任务，成功返回 `204 No Content`，未找到返回 `404`。
+
+Graph-scoped `next_pending` 有可运行任务时返回：
 
 ```json
 {
-  "tasks": [
-    {
-      "task_id": "US-001",
-      "title": "Implement task backend",
-      "status": "pending",
-      "dependencies": []
-    }
-  ]
-}
-```
-
-### `POST /api/v1/graph/tasks`
-
-整体替换当前 meta-agent task graph。请求体形状与 `GET /api/v1/graph/tasks` 一致：
-
-```json
-{
-  "tasks": [
-    {
-      "task_id": "US-001",
-      "title": "Implement task backend",
-      "status": "pending",
-      "dependencies": []
-    }
-  ]
-}
-```
-
-### `GET /api/v1/graph/tasks/{task_id}`
-
-返回单个 meta-agent task payload。未找到时返回：
-
-```json
-{ "status": "not_found" }
-```
-
-### `PUT /api/v1/graph/tasks/{task_id}`
-
-插入或更新单个 meta-agent task payload。新任务会追加到当前 graph 末尾；已有任务保持原 `task_order`。
-
-### `POST /api/v1/graph/tasks/insert`
-
-在指定 task 后插入一组新任务。
-
-```json
-{
-  "anchor_task_id": "US-001",
-  "tasks": [
-    {
-      "task_id": "US-001-a",
-      "title": "Part A",
-      "status": "pending",
-      "dependencies": ["US-001"]
-    }
-  ]
-}
-```
-
-### `POST /api/v1/graph/tasks/next_pending`
-
-返回下一个可运行的 `pending` task。依赖项必须全部为 `complete`，排序规则为 priority 降序、原 graph 顺序升序。
-
-```json
-{
-  "exclude_task_ids": ["US-001"]
-}
-```
-
-Response:
-
-```json
-{
+  "graph_id": "demo-graph",
   "task": {
     "task_id": "US-002",
     "title": "Next task",
@@ -232,18 +178,13 @@ Response:
 }
 ```
 
-无可运行任务时返回空对象：
+无可运行任务时仍保留 `task` 字段，值为 `null`：
 
 ```json
-{}
-```
-
-### `POST /api/v1/graph/tasks/recover`
-
-将所有 `in_progress` task 恢复为 `pending`。
-
-```json
-{ "recovered_count": 1 }
+{
+  "graph_id": "demo-graph",
+  "task": null
+}
 ```
 
 ## `POST /api/v1/tasks/batch`
