@@ -5,7 +5,7 @@
 默认本地地址：
 
 ```text
-http://127.0.0.1:3000
+http://127.0.0.1:6987
 ```
 
 ## `GET /health`
@@ -21,7 +21,7 @@ http://127.0.0.1:3000
   "status": "healthy",
   "instance_id": "local-task",
   "database_target": "localhost:5432/limenet_local",
-  "bind_address": "127.0.0.1:3000"
+  "bind_address": "127.0.0.1:6987"
 }
 ```
 
@@ -35,6 +35,39 @@ http://127.0.0.1:3000
 ### 用途
 
 运维人员可以通过此端点区分本地任务后端和共享/全局 LimeNet 实例，避免将 meta-agent 指向错误的环境。
+
+## Observe Status API
+
+观察 API 是只读状态快照，默认监听 `http://127.0.0.1:6988`。它只观察 run-scoped Graph task 数据，不读取 native worker task 表。
+
+### `GET /status.json`
+
+返回全局轻量摘要，适合 AI agent 或脚本一次读取当前实例、run 列表、状态聚合与观察信号。该接口不返回完整 task payload。
+
+### `GET /runs.json`
+
+返回所有 run 的观察摘要。
+
+### `GET /runs/{run_id}.json`
+
+返回单个 run 的完整观察快照，包括 ordered tasks、recent events、signals 与 raw graph task JSON。
+
+### `GET /runs/{run_id}/tasks/{task_id}.json`
+
+返回单个 task 的观察详情，包括依赖状态、下游 dependents、是否为 next pending task，以及 raw graph task JSON。
+
+状态会归一化为 LimeNet 原生状态名：
+
+```text
+PENDING
+READY
+IN_PROGRESS
+EVALUATING
+BACKOFF
+COMPLETED
+UNKNOWN
+MISSING
+```
 
 ## Meta-agent Graph Task Compatibility API
 

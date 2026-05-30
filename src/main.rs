@@ -1,13 +1,14 @@
 pub mod config;
 pub mod contracts;
+pub mod observe;
 pub mod state;
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -18,6 +19,9 @@ use tokio::sync::Notify;
 use limenet::contracts::{
     ClaimRequest, DelegationContract, DeliveryPackage, DeliveryStatus, EvidenceRollup,
     HeartbeatRequest, Ownership,
+};
+use limenet::observe::{
+    ObserveConfig, ObserveInstance, ObserveRepository, http_origin, resolve_observe_bind_address,
 };
 use limenet::state::{
     BackoffAwakener, BatchError, BatchTaskInput, CreateRunInput, DEFAULT_RUN_ID,
@@ -56,9 +60,7 @@ struct RunSummaryQuery {
     include_next: bool,
 }
 
-async fn list_graph_tasks(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn list_graph_tasks(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
     match repo.list_graph_tasks().await {
         Ok(tasks) => (StatusCode::OK, Json(json!({ "tasks": tasks }))).into_response(),
@@ -166,7 +168,10 @@ async fn run_timeline(
     }
 
     match repo.run_timeline(run_id, 100).await {
-        Ok(events) => (StatusCode::OK, Json(json!({ "run_id": run_id, "events": events })))
+        Ok(events) => (
+            StatusCode::OK,
+            Json(json!({ "run_id": run_id, "events": events })),
+        )
             .into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -176,10 +181,7 @@ async fn run_timeline(
     }
 }
 
-async fn ensure_scoped_run(
-    repo: &TaskRepository<'_>,
-    run_id: uuid::Uuid,
-) -> Result<(), Response> {
+async fn ensure_scoped_run(repo: &TaskRepository<'_>, run_id: uuid::Uuid) -> Result<(), Response> {
     match repo.run_exists(run_id).await {
         Ok(true) => Ok(()),
         Ok(false) => Err(StatusCode::NOT_FOUND.into_response()),
@@ -201,7 +203,10 @@ async fn list_graph_tasks_for_run(
     }
 
     match repo.list_graph_tasks_for_run(run_id).await {
-        Ok(tasks) => (StatusCode::OK, Json(json!({ "run_id": run_id, "tasks": tasks })))
+        Ok(tasks) => (
+            StatusCode::OK,
+            Json(json!({ "run_id": run_id, "tasks": tasks })),
+        )
             .into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -241,7 +246,10 @@ async fn replace_graph_tasks_for_run(
         return response;
     }
 
-    match repo.replace_graph_tasks_for_run(run_id, &payload.tasks).await {
+    match repo
+        .replace_graph_tasks_for_run(run_id, &payload.tasks)
+        .await
+    {
         Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
         Err(err) => (
             StatusCode::BAD_REQUEST,
@@ -277,7 +285,10 @@ async fn upsert_graph_task_for_run(
         return response;
     }
 
-    match repo.upsert_graph_task_for_run(run_id, &task_id, &task).await {
+    match repo
+        .upsert_graph_task_for_run(run_id, &task_id, &task)
+        .await
+    {
         Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
         Err(err) => (
             StatusCode::BAD_REQUEST,
@@ -342,9 +353,15 @@ async fn next_pending_graph_task_for_run(
         .next_pending_graph_task_for_run(run_id, &exclude_task_ids)
         .await
     {
-        Ok(Some(task)) => (StatusCode::OK, Json(json!({ "run_id": run_id, "task": task })))
+        Ok(Some(task)) => (
+            StatusCode::OK,
+            Json(json!({ "run_id": run_id, "task": task })),
+        )
             .into_response(),
-        Ok(None) => (StatusCode::OK, Json(json!({ "run_id": run_id, "task": null })))
+        Ok(None) => (
+            StatusCode::OK,
+            Json(json!({ "run_id": run_id, "task": null })),
+        )
             .into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -413,7 +430,10 @@ async fn insert_graph_tasks_after(
     Json(payload): Json<GraphInsertPayload>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.insert_graph_tasks_after(&payload.anchor_task_id, &payload.tasks).await {
+    match repo
+        .insert_graph_tasks_after(&payload.anchor_task_id, &payload.tasks)
+        .await
+    {
         Ok(()) => (StatusCode::OK, Json(json!({}))).into_response(),
         Err(GraphTaskInsertError::UnknownAnchor(task_id)) => (
             StatusCode::NOT_FOUND,
@@ -457,9 +477,7 @@ async fn next_pending_graph_task(
     }
 }
 
-async fn recover_graph_tasks(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn recover_graph_tasks(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
     match repo.recover_in_progress_graph_tasks().await {
         Ok(recovered_count) => (
@@ -579,11 +597,7 @@ pub fn delegation_ingest_logic(contract: DelegationContract) -> impl IntoRespons
             });
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
-        Err(err) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!(err)),
-        )
-            .into_response(),
+        Err(err) => (StatusCode::BAD_REQUEST, Json(serde_json::json!(err))).into_response(),
     }
 }
 
@@ -620,11 +634,7 @@ pub fn delivery_package_ingest_logic(pkg: DeliveryPackage) -> impl IntoResponse 
             });
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
-        Err(err) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!(err)),
-        )
-            .into_response(),
+        Err(err) => (StatusCode::BAD_REQUEST, Json(serde_json::json!(err))).into_response(),
     }
 }
 
@@ -650,11 +660,7 @@ pub fn evidence_rollup_ingest_logic(rollup: EvidenceRollup) -> impl IntoResponse
             });
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
-        Err(err) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!(err)),
-        )
-            .into_response(),
+        Err(err) => (StatusCode::BAD_REQUEST, Json(serde_json::json!(err))).into_response(),
     }
 }
 
@@ -704,11 +710,7 @@ pub fn ownership_ingest_logic(ownership: Ownership) -> impl IntoResponse {
             }
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
-        Err(err) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!(err)),
-        )
-            .into_response(),
+        Err(err) => (StatusCode::BAD_REQUEST, Json(serde_json::json!(err))).into_response(),
     }
 }
 
@@ -740,16 +742,16 @@ async fn ownership_ingest(
     ownership_ingest_logic(ownership)
 }
 
-/// Resolve the bind address from an explicit value or the default `0.0.0.0:3000`.
+/// Resolve the bind address from an explicit value or the default `127.0.0.1:6987`.
 ///
 /// The caller should pass `std::env::var("LIMENET_BIND").ok().as_deref()` when
 /// resolving from the environment so the function stays pure and testable.
 fn resolve_bind_address(env_value: Option<&str>) -> String {
     env_value
-    .map(|s| s.trim())
-    .filter(|s| !s.is_empty())
-    .map(|s| s.to_string())
-        .unwrap_or_else(|| "0.0.0.0:3000".to_string())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "127.0.0.1:6987".to_string())
 }
 
 /// Resolve the instance identity from an explicit value or the default `default`.
@@ -770,7 +772,11 @@ fn resolve_instance_id(env_value: Option<&str>) -> String {
 ///
 /// Returns a minimal JSON payload that lets operators verify which LimeNet
 /// instance they are talking to without leaking sensitive configuration.
-pub fn health_response(instance_id: &str, database_target: &str, bind_address: &str) -> impl IntoResponse + use<> {
+pub fn health_response(
+    instance_id: &str,
+    database_target: &str,
+    bind_address: &str,
+) -> impl IntoResponse + use<> {
     let response = serde_json::json!({
         "status": "healthy",
         "instance_id": instance_id,
@@ -781,7 +787,80 @@ pub fn health_response(instance_id: &str, database_target: &str, bind_address: &
 }
 
 async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    health_response(&state.instance_id, &state.database_target, &state.bind_address)
+    health_response(
+        &state.instance_id,
+        &state.database_target,
+        &state.bind_address,
+    )
+}
+
+async fn observe_status(State(repo): State<Arc<ObserveRepository>>) -> impl IntoResponse {
+    match repo.global_snapshot().await {
+        Ok(snapshot) => (StatusCode::OK, Json(snapshot)).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn observe_runs(State(repo): State<Arc<ObserveRepository>>) -> impl IntoResponse {
+    match repo.run_summaries(chrono::Utc::now()).await {
+        Ok(runs) => (StatusCode::OK, Json(json!({ "runs": runs }))).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn observe_run(
+    State(repo): State<Arc<ObserveRepository>>,
+    Path(run_id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    match repo.run_snapshot(run_id).await {
+        Ok(Some(snapshot)) => (StatusCode::OK, Json(snapshot)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn observe_task(
+    State(repo): State<Arc<ObserveRepository>>,
+    Path((run_id, task_id)): Path<(uuid::Uuid, String)>,
+) -> impl IntoResponse {
+    match repo.task_snapshot(run_id, &task_id).await {
+        Ok(Some(snapshot)) => (StatusCode::OK, Json(snapshot)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn dashboard_index() -> impl IntoResponse {
+    Html(include_str!("../static/observe-dashboard.html"))
+}
+
+fn observe_json_router(repo: Arc<ObserveRepository>) -> Router {
+    Router::new()
+        .route("/status.json", get(observe_status))
+        .route("/runs.json", get(observe_runs))
+        .route("/runs/{run_id}.json", get(observe_run))
+        .route("/runs/{run_id}/tasks/{task_id}.json", get(observe_task))
+        .with_state(repo)
+}
+
+fn dashboard_router(repo: Arc<ObserveRepository>) -> Router {
+    observe_json_router(repo).route("/", get(dashboard_index))
 }
 
 #[tokio::main]
@@ -794,7 +873,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("LimeNet connecting to database {database_target}...");
 
     let pool = sqlx::PgPool::connect(&database_url).await?;
-    TaskRepository::new(&pool).ensure_run(DEFAULT_RUN_ID).await?;
+    TaskRepository::new(&pool)
+        .ensure_run(DEFAULT_RUN_ID)
+        .await?;
 
     let notify = Arc::new(Notify::new());
     let resolver = DependencyResolver::new(&pool, Arc::clone(&notify));
@@ -813,13 +894,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let bind_addr = resolve_bind_address(std::env::var("LIMENET_BIND").ok().as_deref());
+    let status_bind_addr = resolve_observe_bind_address(
+        std::env::var("LIMENET_STATUS_BIND").ok().as_deref(),
+        &bind_addr,
+    );
+    let dashboard_bind_addr = resolve_observe_bind_address(
+        std::env::var("LIMENET_DASHBOARD_BIND").ok().as_deref(),
+        &status_bind_addr,
+    );
 
     let state = Arc::new(AppState {
-        pool,
+        pool: pool.clone(),
         instance_id,
-        database_target,
+        database_target: database_target.clone(),
         bind_address: bind_addr.clone(),
     });
+
+    let observe_repo = Arc::new(ObserveRepository::new(
+        pool,
+        ObserveConfig {
+            instance: ObserveInstance {
+                instance_id: state.instance_id.clone(),
+                database_target,
+                task_api_address: http_origin(&bind_addr),
+                status_api_address: http_origin(&status_bind_addr),
+                dashboard_address: http_origin(&dashboard_bind_addr),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            },
+        },
+    ));
 
     let app = Router::new()
         .route("/health", get(health_handler))
@@ -847,11 +950,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/v1/runs/{run_id}/graph/tasks/{task_id}",
             get(get_graph_task_for_run).put(upsert_graph_task_for_run),
         )
-        .route("/api/v1/graph/tasks", get(list_graph_tasks).post(replace_graph_tasks))
+        .route(
+            "/api/v1/graph/tasks",
+            get(list_graph_tasks).post(replace_graph_tasks),
+        )
         .route("/api/v1/graph/tasks/insert", post(insert_graph_tasks_after))
-        .route("/api/v1/graph/tasks/next_pending", post(next_pending_graph_task))
+        .route(
+            "/api/v1/graph/tasks/next_pending",
+            post(next_pending_graph_task),
+        )
         .route("/api/v1/graph/tasks/recover", post(recover_graph_tasks))
-        .route("/api/v1/graph/tasks/{task_id}", get(get_graph_task).put(upsert_graph_task))
+        .route(
+            "/api/v1/graph/tasks/{task_id}",
+            get(get_graph_task).put(upsert_graph_task),
+        )
         .route("/api/v1/tasks/batch", post(create_tasks_batch))
         .route("/api/v1/tasks/claim", post(claim_task))
         .route("/api/v1/tasks/{task_id}/heartbeat", post(heartbeat_task))
@@ -862,6 +974,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/deliveries/status", post(delivery_status_ingest))
         .route("/api/v1/ownership/ingest", post(ownership_ingest))
         .with_state(state);
+
+    let status_listener = TcpListener::bind(&status_bind_addr).await?;
+    let status_app = observe_json_router(Arc::clone(&observe_repo));
+    tokio::spawn(async move {
+        if let Err(err) = axum::serve(status_listener, status_app).await {
+            eprintln!("LimeNet status API stopped: {err}");
+        }
+    });
+    println!("LimeNet status API starting on {status_bind_addr}...");
+
+    let dashboard_listener = TcpListener::bind(&dashboard_bind_addr).await?;
+    let dashboard_app = dashboard_router(observe_repo);
+    tokio::spawn(async move {
+        if let Err(err) = axum::serve(dashboard_listener, dashboard_app).await {
+            eprintln!("LimeNet dashboard stopped: {err}");
+        }
+    });
+    println!("LimeNet dashboard starting on {dashboard_bind_addr}...");
 
     let listener = TcpListener::bind(&bind_addr).await?;
     println!("LimeNet task orchestrator starting on {bind_addr}...");
@@ -990,9 +1120,21 @@ mod tests {
         let response = delegation_ingest_logic(contract).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
-        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
-        assert_eq!(body["reason"], "missing_field", "reason: {:?}", body["reason"]);
-        assert_eq!(body["field"], "upstream_backend_id", "field: {:?}", body["field"]);
+        assert_eq!(
+            body["error"], "validation_failed",
+            "error: {:?}",
+            body["error"]
+        );
+        assert_eq!(
+            body["reason"], "missing_field",
+            "reason: {:?}",
+            body["reason"]
+        );
+        assert_eq!(
+            body["field"], "upstream_backend_id",
+            "field: {:?}",
+            body["field"]
+        );
         assert_eq!(body["anchor"], "upstream", "anchor: {:?}", body["anchor"]);
     }
 
@@ -1016,9 +1158,21 @@ mod tests {
         let response = delegation_ingest_logic(contract).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
-        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
-        assert_eq!(body["reason"], "missing_field", "reason: {:?}", body["reason"]);
-        assert_eq!(body["field"], "upstream_work_request_id", "field: {:?}", body["field"]);
+        assert_eq!(
+            body["error"], "validation_failed",
+            "error: {:?}",
+            body["error"]
+        );
+        assert_eq!(
+            body["reason"], "missing_field",
+            "reason: {:?}",
+            body["reason"]
+        );
+        assert_eq!(
+            body["field"], "upstream_work_request_id",
+            "field: {:?}",
+            body["field"]
+        );
         assert_eq!(body["anchor"], "upstream", "anchor: {:?}", body["anchor"]);
     }
 
@@ -1042,9 +1196,21 @@ mod tests {
         let response = delegation_ingest_logic(contract).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
-        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
-        assert_eq!(body["reason"], "empty_field", "reason: {:?}", body["reason"]);
-        assert_eq!(body["field"], "downstream_domain_kind", "field: {:?}", body["field"]);
+        assert_eq!(
+            body["error"], "validation_failed",
+            "error: {:?}",
+            body["error"]
+        );
+        assert_eq!(
+            body["reason"], "empty_field",
+            "reason: {:?}",
+            body["reason"]
+        );
+        assert_eq!(
+            body["field"], "downstream_domain_kind",
+            "field: {:?}",
+            body["field"]
+        );
         assert_eq!(body["anchor"], "downstream", "anchor: {:?}", body["anchor"]);
     }
 
@@ -1121,8 +1287,7 @@ mod tests {
             );
 
             assert_eq!(
-                body["downstream_domain_kind"],
-                record.downstream_domain_kind,
+                body["downstream_domain_kind"], record.downstream_domain_kind,
                 "downstream_domain_kind mismatch for {case_name}"
             );
 
@@ -1197,9 +1362,21 @@ mod tests {
         let response = delivery_package_ingest_logic(pkg).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
-        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
-        assert_eq!(body["reason"], "missing_anchor", "reason: {:?}", body["reason"]);
-        assert_eq!(body["field"], "delivery_contract_id", "field: {:?}", body["field"]);
+        assert_eq!(
+            body["error"], "validation_failed",
+            "error: {:?}",
+            body["error"]
+        );
+        assert_eq!(
+            body["reason"], "missing_anchor",
+            "reason: {:?}",
+            body["reason"]
+        );
+        assert_eq!(
+            body["field"], "delivery_contract_id",
+            "field: {:?}",
+            body["field"]
+        );
     }
 
     #[tokio::test]
@@ -1281,8 +1458,16 @@ mod tests {
         let response = delivery_status_ingest_logic("unknown").into_response();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let body = body_to_json(response).await;
-        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
-        assert_eq!(body["reason"], "unsupported_status", "reason: {:?}", body["reason"]);
+        assert_eq!(
+            body["error"], "validation_failed",
+            "error: {:?}",
+            body["error"]
+        );
+        assert_eq!(
+            body["reason"], "unsupported_status",
+            "reason: {:?}",
+            body["reason"]
+        );
         assert_eq!(body["value"], "unknown", "value: {:?}", body["value"]);
     }
 
@@ -1291,8 +1476,16 @@ mod tests {
         let response = delivery_status_ingest_logic("").into_response();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let body = body_to_json(response).await;
-        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
-        assert_eq!(body["reason"], "unsupported_status", "reason: {:?}", body["reason"]);
+        assert_eq!(
+            body["error"], "validation_failed",
+            "error: {:?}",
+            body["error"]
+        );
+        assert_eq!(
+            body["reason"], "unsupported_status",
+            "reason: {:?}",
+            body["reason"]
+        );
         assert_eq!(body["value"], "", "value: {:?}", body["value"]);
     }
 
@@ -1301,8 +1494,16 @@ mod tests {
         let response = delivery_status_ingest_logic("Proposed").into_response();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let body = body_to_json(response).await;
-        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
-        assert_eq!(body["reason"], "unsupported_status", "reason: {:?}", body["reason"]);
+        assert_eq!(
+            body["error"], "validation_failed",
+            "error: {:?}",
+            body["error"]
+        );
+        assert_eq!(
+            body["reason"], "unsupported_status",
+            "reason: {:?}",
+            body["reason"]
+        );
         assert_eq!(body["value"], "Proposed", "value: {:?}", body["value"]);
     }
 
@@ -1311,8 +1512,7 @@ mod tests {
         // The custom Deserialize impl should produce an error whose
         // Display representation contains the unrecognised value,
         // matching the TryFrom error format.
-        let serde_err =
-            serde_json::from_str::<DeliveryStatus>(r#""bogus_value""#).unwrap_err();
+        let serde_err = serde_json::from_str::<DeliveryStatus>(r#""bogus_value""#).unwrap_err();
         let err_msg = serde_err.to_string();
         assert!(
             err_msg.contains("bogus_value"),
@@ -1324,10 +1524,8 @@ mod tests {
     async fn test_delivery_status_serde_error_inside_review_surface() {
         // Unknown status inside ReviewSurface must also fail with a
         // consistent error that includes the unrecognised value.
-        let serde_err = serde_json::from_str::<ReviewSurface>(
-            r#"{"status":"invalid_status"}"#,
-        )
-        .unwrap_err();
+        let serde_err =
+            serde_json::from_str::<ReviewSurface>(r#"{"status":"invalid_status"}"#).unwrap_err();
         let err_msg = serde_err.to_string();
         assert!(
             err_msg.contains("invalid_status"),
@@ -1443,10 +1641,22 @@ mod tests {
         let response = ownership_ingest_logic(ownership).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
-        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
-        assert_eq!(body["reason"], "missing_field", "reason: {:?}", body["reason"]);
+        assert_eq!(
+            body["error"], "validation_failed",
+            "error: {:?}",
+            body["error"]
+        );
+        assert_eq!(
+            body["reason"], "missing_field",
+            "reason: {:?}",
+            body["reason"]
+        );
         assert_eq!(body["field"], "backend_kind", "field: {:?}", body["field"]);
-        assert_eq!(body["ownership_mode"], "mirror", "mode: {:?}", body["ownership_mode"]);
+        assert_eq!(
+            body["ownership_mode"], "mirror",
+            "mode: {:?}",
+            body["ownership_mode"]
+        );
     }
 
     #[tokio::test]
@@ -1460,10 +1670,22 @@ mod tests {
         let response = ownership_ingest_logic(ownership).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
-        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
-        assert_eq!(body["reason"], "invalid_transition", "reason: {:?}", body["reason"]);
+        assert_eq!(
+            body["error"], "validation_failed",
+            "error: {:?}",
+            body["error"]
+        );
+        assert_eq!(
+            body["reason"], "invalid_transition",
+            "reason: {:?}",
+            body["reason"]
+        );
         assert_eq!(body["field"], "promoted_from", "field: {:?}", body["field"]);
-        assert_eq!(body["ownership_mode"], "mirror", "mode: {:?}", body["ownership_mode"]);
+        assert_eq!(
+            body["ownership_mode"], "mirror",
+            "mode: {:?}",
+            body["ownership_mode"]
+        );
     }
 
     #[tokio::test]
@@ -1477,10 +1699,22 @@ mod tests {
         let response = ownership_ingest_logic(ownership).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(response).await;
-        assert_eq!(body["error"], "validation_failed", "error: {:?}", body["error"]);
-        assert_eq!(body["reason"], "missing_field", "reason: {:?}", body["reason"]);
+        assert_eq!(
+            body["error"], "validation_failed",
+            "error: {:?}",
+            body["error"]
+        );
+        assert_eq!(
+            body["reason"], "missing_field",
+            "reason: {:?}",
+            body["reason"]
+        );
         assert_eq!(body["field"], "backend_kind", "field: {:?}", body["field"]);
-        assert_eq!(body["ownership_mode"], "remote_canonical", "mode: {:?}", body["ownership_mode"]);
+        assert_eq!(
+            body["ownership_mode"], "remote_canonical",
+            "mode: {:?}",
+            body["ownership_mode"]
+        );
     }
 
     #[tokio::test]
@@ -1710,8 +1944,7 @@ mod tests {
     fn test_all_baseline_evidence_rollup_records_serde_roundtrip() {
         for record in limenet::fixtures::DeliveryFixtures::all_baseline_rollups() {
             let json = serde_json::to_string(&record).expect("fixture must serialize");
-            let rt: EvidenceRollup =
-                serde_json::from_str(&json).expect("fixture must deserialize");
+            let rt: EvidenceRollup = serde_json::from_str(&json).expect("fixture must deserialize");
             assert_eq!(rt.evidence_rollup_id, record.evidence_rollup_id);
             assert_eq!(rt.task_id, record.task_id);
             assert_eq!(rt.summary, record.summary);
@@ -1820,8 +2053,8 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[test]
-    fn test_resolve_bind_address_defaults_to_0_0_0_0_3000() {
-        assert_eq!(resolve_bind_address(None), "0.0.0.0:3000");
+    fn test_resolve_bind_address_defaults_to_local_6987() {
+        assert_eq!(resolve_bind_address(None), "127.0.0.1:6987");
     }
 
     #[test]
@@ -1842,12 +2075,12 @@ mod tests {
 
     #[test]
     fn test_resolve_bind_address_empty_string_falls_back_to_default() {
-        assert_eq!(resolve_bind_address(Some("")), "0.0.0.0:3000");
+        assert_eq!(resolve_bind_address(Some("")), "127.0.0.1:6987");
     }
 
     #[test]
     fn test_resolve_bind_address_whitespace_only_falls_back_to_default() {
-        assert_eq!(resolve_bind_address(Some("   ")), "0.0.0.0:3000");
+        assert_eq!(resolve_bind_address(Some("   ")), "127.0.0.1:6987");
     }
 
     // -------------------------------------------------------------------
@@ -1861,10 +2094,7 @@ mod tests {
 
     #[test]
     fn test_resolve_instance_id_uses_custom_value() {
-        assert_eq!(
-            resolve_instance_id(Some("local-task")),
-            "local-task"
-        );
+        assert_eq!(resolve_instance_id(Some("local-task")), "local-task");
     }
 
     #[test]
@@ -1891,19 +2121,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_response_returns_ok() {
-        let response = health_response("local-dev", "localhost:5432/limenet_local", "127.0.0.1:3000")
-            .into_response();
+        let response = health_response(
+            "local-dev",
+            "localhost:5432/limenet_local",
+            "127.0.0.1:3000",
+        )
+        .into_response();
         assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn test_health_response_includes_identity_fields() {
-        let response = health_response("shared-staging", "db.example.com:5432/limenet_shared", "0.0.0.0:3001")
-            .into_response();
+        let response = health_response(
+            "shared-staging",
+            "db.example.com:5432/limenet_shared",
+            "0.0.0.0:3001",
+        )
+        .into_response();
         let body = body_to_json(response).await;
         assert_eq!(body["status"], "healthy");
         assert_eq!(body["instance_id"], "shared-staging");
-        assert_eq!(body["database_target"], "db.example.com:5432/limenet_shared");
+        assert_eq!(
+            body["database_target"],
+            "db.example.com:5432/limenet_shared"
+        );
         assert_eq!(body["bind_address"], "0.0.0.0:3001");
     }
 
@@ -1912,8 +2153,7 @@ mod tests {
         // database_target is already credential-stripped by config::display_database_target.
         // The health endpoint merely echoes what it is given, so we verify it
         // does not add any extra parsing that could expose secrets.
-        let response = health_response("default", "host:5432/db", "0.0.0.0:3000")
-            .into_response();
+        let response = health_response("default", "host:5432/db", "0.0.0.0:3000").into_response();
         let body = body_to_json(response).await;
         let json_str = serde_json::to_string(&body).unwrap();
         assert!(

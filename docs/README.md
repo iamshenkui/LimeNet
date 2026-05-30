@@ -7,6 +7,7 @@ LimeNet 的项目文档统一收敛在 `docs/` 目录中，这里作为文档导
 - `architecture.md`: 系统定位、任务模型、状态机、调度与后台守护逻辑
 - `api.md`: 当前已实现的 HTTP API、请求格式与示例
 - `operations.md`: 数据库、迁移、启动方式、示例任务图与已知限制
+- `observe-dashboard-prd.md`: 观察 dashboard 的数据范围、端口模型与交互约定
 
 ## 版本信息
 

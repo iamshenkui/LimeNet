@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LimeNet Observe</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f8;
+      --panel: #ffffff;
+      --ink: #18181b;
+      --muted: #71717a;
+      --line: #d9dee5;
+      --accent: #2f7d68;
+      --warn: #a16207;
+      --risk: #b42318;
+      --mono: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      letter-spacing: 0;
+    }
+    button, input { font: inherit; }
+    button {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      padding: 0 12px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button:active { transform: translateY(1px); }
+    .shell {
+      width: min(1480px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0 40px;
+    }
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: start;
+      padding: 14px 0 18px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 18px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.1;
+      font-weight: 720;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .mono { font-family: var(--mono); }
+    .statusline {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: flex-end;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .runs {
+      display: grid;
+      gap: 18px;
+    }
+    .run {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .run-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .run-title {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }
+    .run-title h2 {
+      margin: 0;
+      font-size: 17px;
+      line-height: 1.2;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      font-family: var(--mono);
+      background: #fafafa;
+    }
+    .counts {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .count {
+      display: grid;
+      grid-template-columns: auto auto;
+      gap: 8px;
+      align-items: center;
+      min-height: 30px;
+      padding: 0 9px;
+      border-left: 1px solid var(--line);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .count b { color: var(--ink); }
+    .run-body {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 320px;
+      gap: 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: middle;
+      font-size: 13px;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 650;
+      background: #fbfbfc;
+    }
+    tr.task-row { cursor: pointer; }
+    tr.task-row:hover { background: #f8faf9; }
+    .status {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--accent);
+      white-space: nowrap;
+    }
+    .status.UNKNOWN, .status.MISSING { color: var(--warn); }
+    .status.BACKOFF { color: var(--risk); }
+    .truncate {
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .side {
+      border-left: 1px solid var(--line);
+      padding: 12px;
+      min-width: 0;
+    }
+    .signals, .events {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .section-title {
+      margin: 0 0 8px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 700;
+      text-transform: uppercase;
+      font-family: var(--mono);
+    }
+    .signal, .event {
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .signal b { color: var(--warn); font-family: var(--mono); }
+    .drawer {
+      position: fixed;
+      inset: 0 0 0 auto;
+      width: min(720px, 100%);
+      background: var(--panel);
+      border-left: 1px solid var(--line);
+      box-shadow: -16px 0 40px rgba(24, 24, 27, 0.08);
+      transform: translateX(102%);
+      transition: transform 180ms ease;
+      z-index: 20;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .drawer.open { transform: translateX(0); }
+    .drawer-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .drawer-body {
+      overflow: auto;
+      padding: 16px;
+    }
+    pre {
+      overflow: auto;
+      background: #f4f5f6;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      gap: 8px 12px;
+      margin-bottom: 16px;
+      font-size: 13px;
+    }
+    .kv div:nth-child(odd) { color: var(--muted); }
+    .empty, .error {
+      padding: 24px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      color: var(--muted);
+    }
+    .error { color: var(--risk); }
+
+    @media (max-width: 900px) {
+      .shell { width: min(100% - 20px, 1480px); padding-top: 12px; }
+      .topbar, .run-head, .run-body { grid-template-columns: 1fr; }
+      .statusline, .counts { justify-content: flex-start; }
+      .side { border-left: 0; border-top: 1px solid var(--line); }
+      th:nth-child(4), td:nth-child(4) { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="topbar">
+      <div>
+        <h1>LimeNet Observe</h1>
+        <div id="instance-meta" class="meta"></div>
+      </div>
+      <div class="statusline">
+        <span id="refresh-state">loading</span>
+        <button id="refresh-button" type="button">Refresh</button>
+      </div>
+    </section>
+    <section id="content" class="runs"></section>
+  </main>
+
+  <aside id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <div>
+        <div id="drawer-title" class="truncate"></div>
+        <div id="drawer-subtitle" class="meta"></div>
+      </div>
+      <button id="drawer-close" type="button">Close</button>
+    </div>
+    <div id="drawer-body" class="drawer-body"></div>
+  </aside>
+
+  <script>
+    const content = document.getElementById("content");
+    const instanceMeta = document.getElementById("instance-meta");
+    const refreshState = document.getElementById("refresh-state");
+    const drawer = document.getElementById("drawer");
+    const drawerTitle = document.getElementById("drawer-title");
+    const drawerSubtitle = document.getElementById("drawer-subtitle");
+    const drawerBody = document.getElementById("drawer-body");
+
+    document.getElementById("refresh-button").addEventListener("click", load);
+    document.getElementById("drawer-close").addEventListener("click", closeDrawer);
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+      }[char]));
+    }
+
+    function fmtTime(value) {
+      if (!value) return "";
+      return new Date(value).toLocaleString();
+    }
+
+    async function fetchJson(url) {
+      const response = await fetch(url, { headers: { "Accept": "application/json" } });
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      return response.json();
+    }
+
+    async function load() {
+      refreshState.textContent = "refreshing";
+      try {
+        const snapshot = await fetchJson("/status.json");
+        renderInstance(snapshot);
+        await renderRuns(snapshot.runs || []);
+        refreshState.textContent = `updated ${fmtTime(snapshot.observed_at)}`;
+      } catch (error) {
+        content.innerHTML = `<div class="error">Unable to load observe snapshot: ${escapeHtml(error.message)}</div>`;
+        refreshState.textContent = "error";
+      }
+    }
+
+    function renderInstance(snapshot) {
+      const instance = snapshot.instance || {};
+      instanceMeta.innerHTML = [
+        ["instance", instance.instance_id],
+        ["task", instance.task_api_address],
+        ["status", instance.status_api_address],
+        ["dashboard", instance.dashboard_address],
+        ["database", instance.database_target]
+      ].map(([label, value]) => `<span><b>${label}</b> <span class="mono">${escapeHtml(value)}</span></span>`).join("");
+    }
+
+    async function renderRuns(runs) {
+      if (!runs.length) {
+        content.innerHTML = `<div class="empty">No runs observed.</div>`;
+        return;
+      }
+
+      const snapshots = await Promise.all(runs.map((run) => fetchJson(`/runs/${run.run_id}.json`).catch((error) => ({ error, run }))));
+      content.innerHTML = snapshots.map((snapshot) => snapshot.error ? renderRunError(snapshot) : renderRun(snapshot)).join("");
+      for (const row of document.querySelectorAll("[data-task-url]")) {
+        row.addEventListener("click", () => openTask(row.dataset.taskUrl));
+      }
+    }
+
+    function renderRunError(item) {
+      return `<article class="run"><div class="error">Unable to load run ${escapeHtml(item.run.run_id)}: ${escapeHtml(item.error.message)}</div></article>`;
+    }
+
+    function renderRun(snapshot) {
+      const run = snapshot.run;
+      const counts = ["PENDING", "READY", "IN_PROGRESS", "EVALUATING", "BACKOFF", "COMPLETED", "UNKNOWN", "MISSING"].map((key) => {
+        const value = run.status_counts?.[key] || (key === "MISSING" ? run.missing_status_count : 0);
+        if (!value) return "";
+        return `<span class="count"><span>${key}</span><b>${value}</b></span>`;
+      }).join("");
+      const tasks = (snapshot.tasks || []).map((task) => `
+        <tr class="task-row" data-task-url="/runs/${run.run_id}/tasks/${encodeURIComponent(task.task_id)}.json">
+          <td class="mono truncate">${escapeHtml(task.task_id)}</td>
+          <td><div class="truncate">${escapeHtml(task.title || "")}</div></td>
+          <td><span class="status ${escapeHtml(task.status.normalized)}">${escapeHtml(task.status.normalized)}</span></td>
+          <td class="mono">${escapeHtml(task.dependencies.length)}</td>
+          <td class="mono truncate">${escapeHtml(fmtTime(task.updated_at))}</td>
+        </tr>
+      `).join("");
+      const signals = (snapshot.signals || []).map((signal) => `
+        <div class="signal"><b>${escapeHtml(signal.code)}</b><br>${escapeHtml(signal.message)}</div>
+      `).join("") || `<div class="signal">No signals.</div>`;
+      const events = (snapshot.recent_events || []).slice(0, 8).map((event) => `
+        <div class="event"><span class="mono">${escapeHtml(event.status)}</span> ${escapeHtml(event.task_id)}<br>${escapeHtml(fmtTime(event.updated_at))}</div>
+      `).join("") || `<div class="event">No recent events.</div>`;
+
+      return `
+        <article class="run">
+          <header class="run-head">
+            <div>
+              <div class="run-title">
+                <h2>${escapeHtml(run.display_name || run.source_ref || run.run_id)}</h2>
+                <span class="pill">${escapeHtml(run.source_kind)}</span>
+                <span class="pill">${escapeHtml(run.status)}</span>
+              </div>
+              <div class="meta">
+                <span class="mono">${escapeHtml(run.run_id)}</span>
+                <span>${escapeHtml(run.task_count)} tasks</span>
+                <span>activity ${escapeHtml(fmtTime(run.last_activity_at))}</span>
+              </div>
+            </div>
+            <div class="counts">${counts}</div>
+          </header>
+          <div class="run-body">
+            <div>
+              <table>
+                <thead>
+                  <tr><th>Task</th><th>Title</th><th>Status</th><th>Deps</th><th>Updated</th></tr>
+                </thead>
+                <tbody>${tasks}</tbody>
+              </table>
+            </div>
+            <aside class="side">
+              <p class="section-title">Signals</p>
+              <div class="signals">${signals}</div>
+              <p class="section-title">Recent</p>
+              <div class="events">${events}</div>
+            </aside>
+          </div>
+        </article>
+      `;
+    }
+
+    async function openTask(url) {
+      drawer.classList.add("open");
+      drawer.setAttribute("aria-hidden", "false");
+      drawerTitle.textContent = "Loading task";
+      drawerSubtitle.innerHTML = "";
+      drawerBody.innerHTML = `<div class="empty">Loading task detail.</div>`;
+      try {
+        const snapshot = await fetchJson(url);
+        const task = snapshot.task;
+        drawerTitle.textContent = task.title || task.task_id;
+        drawerSubtitle.innerHTML = `<span class="mono">${escapeHtml(task.run_id)}</span><span class="mono">${escapeHtml(task.task_id)}</span>`;
+        drawerBody.innerHTML = `
+          <div class="kv">
+            <div>Status</div><div class="mono">${escapeHtml(task.status.normalized)} ${task.status.raw ? `(${escapeHtml(task.status.raw)})` : ""}</div>
+            <div>Updated</div><div>${escapeHtml(fmtTime(task.updated_at))}</div>
+            <div>Dependencies</div><div class="mono">${escapeHtml(task.dependencies.join(", ") || "none")}</div>
+            <div>Dependents</div><div class="mono">${escapeHtml(task.dependents.join(", ") || "none")}</div>
+            <div>Dependencies complete</div><div>${task.dependencies_complete ? "yes" : "no"}</div>
+            <div>Next pending</div><div>${task.is_next_pending ? "yes" : "no"}</div>
+          </div>
+          <p class="section-title">Raw task JSON</p>
+          <pre>${escapeHtml(JSON.stringify(task.raw_task, null, 2))}</pre>
+        `;
+      } catch (error) {
+        drawerBody.innerHTML = `<div class="error">Unable to load task: ${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function closeDrawer() {
+      drawer.classList.remove("open");
+      drawer.setAttribute("aria-hidden", "true");
+    }
+
+    load();
+    setInterval(load, 10000);
+  </script>
+</body>
+</html>

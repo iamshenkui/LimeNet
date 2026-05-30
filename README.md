@@ -8,6 +8,7 @@ LimeNet 是一个用 Rust、Axum 和 PostgreSQL 实现的多 Agent 任务编排�
 - `docs/architecture.md`: 架构、状态机与调度模型
 - `docs/api.md`: HTTP API 与示例请求
 - `docs/operations.md`: 数据库、运行方式与当前限制
+- `docs/observe-dashboard-prd.md`: 观察 dashboard 数据范围与端口模型
 - `CHANGELOG.md`: 版本变更记录
 
 ## 快速开始
@@ -22,10 +23,18 @@ cargo run
 
 ```text
 LimeNet connecting to database localhost:5432/limenet...
-LimeNet task orchestrator starting on 0.0.0.0:3000...
+LimeNet status API starting on 127.0.0.1:6988...
+LimeNet dashboard starting on 127.0.0.1:6989...
+LimeNet task orchestrator starting on 127.0.0.1:6987...
 ```
 
 通过设置不同的 `DATABASE_URL` 和 `LIMENET_BIND` 可以在同一台机器上运行多个完全隔离的实例。详见 `docs/operations.md`。
+
+默认本地端口：
+
+- 任务 API: `http://127.0.0.1:6987`
+- 状态 JSON: `http://127.0.0.1:6988/status.json`
+- 观察 dashboard: `http://127.0.0.1:6989`
 
 ## 参考
 
