@@ -1,0 +1,712 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LimeNet Observe</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f8;
+      --panel: #ffffff;
+      --ink: #18181b;
+      --muted: #71717a;
+      --line: #d9dee5;
+      --accent: #2f7d68;
+      --warn: #a16207;
+      --risk: #b42318;
+      --done: #2f7d68;
+      --active: #2563eb;
+      --pending: #b7791f;
+      --blocked: #b42318;
+      --mono: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      letter-spacing: 0;
+    }
+    button, input { font: inherit; }
+    button {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      padding: 0 12px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button:active { transform: translateY(1px); }
+    .shell {
+      width: min(1480px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0 40px;
+    }
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: start;
+      padding: 14px 0 18px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 18px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.1;
+      font-weight: 720;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .mono { font-family: var(--mono); }
+    .statusline {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: flex-end;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .runs {
+      display: grid;
+      gap: 28px;
+    }
+    .run {
+      border-top: 1px solid var(--line);
+      padding-top: 18px;
+    }
+    .run-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: start;
+      margin-bottom: 14px;
+    }
+    .run-title {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }
+    .run-title h2 {
+      margin: 0;
+      font-size: 17px;
+      line-height: 1.2;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      font-family: var(--mono);
+      background: #fafafa;
+    }
+    .counts {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .count {
+      display: grid;
+      grid-template-columns: auto auto;
+      gap: 8px;
+      align-items: center;
+      min-height: 30px;
+      padding: 0 9px;
+      border-left: 1px solid var(--line);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .count b { color: var(--ink); }
+    .run-body {
+      display: grid;
+      gap: 14px;
+      align-items: start;
+    }
+    .main-track {
+      display: grid;
+      gap: 14px;
+      min-width: 0;
+    }
+    .graph-panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      overflow: auto;
+    }
+    .graph {
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(190px, 220px);
+      gap: 28px;
+      min-width: max-content;
+      padding: 4px;
+    }
+    .graph-column {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+    .graph-node {
+      position: relative;
+      min-height: 72px;
+      display: grid;
+      gap: 8px;
+      padding: 10px 10px 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfc;
+      cursor: pointer;
+      text-align: left;
+    }
+    .graph-node::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 3px;
+      border-radius: 8px 0 0 8px;
+      background: var(--pending);
+    }
+    .graph-node.status-PENDING,
+    .graph-node.status-READY {
+      border-color: rgba(183, 121, 31, 0.38);
+      background: #fffbeb;
+    }
+    .graph-node.status-IN_PROGRESS,
+    .graph-node.status-EVALUATING {
+      border-color: rgba(37, 99, 235, 0.38);
+      background: #eff6ff;
+      box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.10);
+    }
+    .graph-node.status-IN_PROGRESS::before,
+    .graph-node.status-EVALUATING::before {
+      background: var(--active);
+    }
+    .graph-node.status-COMPLETED {
+      background: #f6faf8;
+      border-color: rgba(47, 125, 104, 0.38);
+      color: #315d50;
+    }
+    .graph-node.status-COMPLETED::before {
+      background: var(--done);
+    }
+    .graph-node.status-BACKOFF::before,
+    .graph-node.status-UNKNOWN::before,
+    .graph-node.status-MISSING::before { background: var(--blocked); }
+    .graph-node.status-BACKOFF,
+    .graph-node.status-UNKNOWN,
+    .graph-node.status-MISSING {
+      border-color: rgba(180, 35, 24, 0.38);
+      background: #fff5f5;
+    }
+    .graph-node:hover {
+      border-color: #aeb8c3;
+      box-shadow: 0 8px 20px rgba(24, 24, 27, 0.06);
+    }
+    .graph-node.has-deps::after {
+      content: "";
+      position: absolute;
+      left: -29px;
+      top: 50%;
+      width: 28px;
+      border-top: 1px solid var(--line);
+    }
+    .graph-id {
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .graph-title {
+      font-size: 12px;
+      line-height: 1.3;
+      font-weight: 660;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .graph-status {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: inherit;
+    }
+    .task-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      max-height: 560px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+    .task-card {
+      position: relative;
+      min-height: 148px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      gap: 12px;
+      padding: 13px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+    }
+    .task-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 3px;
+      border-radius: 8px 0 0 8px;
+      background: var(--pending);
+    }
+    .task-card.status-PENDING,
+    .task-card.status-READY {
+      border-color: rgba(183, 121, 31, 0.38);
+      background: #fffbeb;
+    }
+    .task-card.status-IN_PROGRESS,
+    .task-card.status-EVALUATING {
+      border-color: rgba(37, 99, 235, 0.38);
+      background: #eff6ff;
+    }
+    .task-card.status-IN_PROGRESS::before,
+    .task-card.status-EVALUATING::before {
+      background: var(--active);
+    }
+    .task-card.status-COMPLETED {
+      border-color: rgba(47, 125, 104, 0.38);
+      background: #f6faf8;
+    }
+    .task-card.status-COMPLETED::before {
+      background: var(--done);
+    }
+    .task-card.status-BACKOFF::before,
+    .task-card.status-UNKNOWN::before,
+    .task-card.status-MISSING::before { background: var(--blocked); }
+    .task-card.status-BACKOFF,
+    .task-card.status-UNKNOWN,
+    .task-card.status-MISSING {
+      border-color: rgba(180, 35, 24, 0.38);
+      background: #fff5f5;
+    }
+    .task-card:hover {
+      border-color: #aeb8c3;
+      box-shadow: 0 10px 24px rgba(24, 24, 27, 0.06);
+      transform: translateY(-1px);
+    }
+    .task-card:active { transform: translateY(0); }
+    .task-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .task-id {
+      color: var(--muted);
+      font-size: 12px;
+      min-width: 0;
+    }
+    .task-title {
+      min-height: 42px;
+      font-size: 14px;
+      line-height: 1.35;
+      font-weight: 680;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .task-foot {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: end;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .task-facts {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .status {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--pending);
+      white-space: nowrap;
+    }
+    .status.COMPLETED { color: var(--done); }
+    .status.IN_PROGRESS, .status.EVALUATING { color: var(--active); }
+    .status.UNKNOWN, .status.MISSING, .status.BACKOFF { color: var(--blocked); }
+    .truncate {
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .run-footer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 12px;
+    }
+    .side {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      min-width: 0;
+    }
+    .signals, .events {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .section-title {
+      margin: 0 0 8px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 700;
+      text-transform: uppercase;
+      font-family: var(--mono);
+    }
+    .signal, .event {
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .signal b { color: var(--warn); font-family: var(--mono); }
+    .drawer {
+      position: fixed;
+      inset: 0 0 0 auto;
+      width: min(720px, 100%);
+      background: var(--panel);
+      border-left: 1px solid var(--line);
+      box-shadow: -16px 0 40px rgba(24, 24, 27, 0.08);
+      transform: translateX(102%);
+      transition: transform 180ms ease;
+      z-index: 20;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .drawer.open { transform: translateX(0); }
+    .drawer-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .drawer-body {
+      overflow: auto;
+      padding: 16px;
+    }
+    pre {
+      overflow: auto;
+      background: #f4f5f6;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      gap: 8px 12px;
+      margin-bottom: 16px;
+      font-size: 13px;
+    }
+    .kv div:nth-child(odd) { color: var(--muted); }
+    .empty, .error {
+      padding: 24px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      color: var(--muted);
+    }
+    .error { color: var(--risk); }
+
+    @media (max-width: 900px) {
+      .shell { width: min(100% - 20px, 1480px); padding-top: 12px; }
+      .topbar, .run-head, .run-footer { grid-template-columns: 1fr; }
+      .statusline, .counts { justify-content: flex-start; }
+      .task-grid { grid-template-columns: 1fr; }
+      .graph { grid-auto-columns: minmax(170px, 190px); gap: 20px; }
+      .graph-node.has-deps::after { left: -21px; width: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="topbar">
+      <div>
+        <h1>LimeNet Observe</h1>
+        <div id="instance-meta" class="meta"></div>
+      </div>
+      <div class="statusline">
+        <span id="refresh-state">loading</span>
+        <button id="refresh-button" type="button">Refresh</button>
+      </div>
+    </section>
+    <section id="content" class="runs"></section>
+  </main>
+
+  <aside id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <div>
+        <div id="drawer-title" class="truncate"></div>
+        <div id="drawer-subtitle" class="meta"></div>
+      </div>
+      <button id="drawer-close" type="button">Close</button>
+    </div>
+    <div id="drawer-body" class="drawer-body"></div>
+  </aside>
+
+  <script>
+    const content = document.getElementById("content");
+    const instanceMeta = document.getElementById("instance-meta");
+    const refreshState = document.getElementById("refresh-state");
+    const drawer = document.getElementById("drawer");
+    const drawerTitle = document.getElementById("drawer-title");
+    const drawerSubtitle = document.getElementById("drawer-subtitle");
+    const drawerBody = document.getElementById("drawer-body");
+    let isLoading = false;
+
+    document.getElementById("refresh-button").addEventListener("click", load);
+    document.getElementById("drawer-close").addEventListener("click", closeDrawer);
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+      }[char]));
+    }
+
+    function fmtTime(value) {
+      if (!value) return "";
+      return new Date(value).toLocaleString();
+    }
+
+    async function fetchJson(url) {
+      const response = await fetch(url, { headers: { "Accept": "application/json" } });
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      return response.json();
+    }
+
+    async function load() {
+      if (isLoading) return;
+      isLoading = true;
+      refreshState.textContent = "refreshing";
+      try {
+        const snapshot = await fetchJson("/status.json");
+        renderInstance(snapshot);
+        await renderRuns(snapshot.runs || []);
+        refreshState.textContent = `updated ${fmtTime(snapshot.observed_at)}`;
+      } catch (error) {
+        content.innerHTML = `<div class="error">Unable to load observe snapshot: ${escapeHtml(error.message)}</div>`;
+        refreshState.textContent = "error";
+      } finally {
+        isLoading = false;
+      }
+    }
+
+    function renderInstance(snapshot) {
+      const instance = snapshot.instance || {};
+      instanceMeta.innerHTML = [
+        ["instance", instance.instance_id],
+        ["task", instance.task_api_address],
+        ["status", instance.status_api_address],
+        ["dashboard", instance.dashboard_address],
+        ["database", instance.database_target]
+      ].map(([label, value]) => `<span><b>${label}</b> <span class="mono">${escapeHtml(value)}</span></span>`).join("");
+    }
+
+    async function renderRuns(runs) {
+      if (!runs.length) {
+        content.innerHTML = `<div class="empty">No runs observed.</div>`;
+        return;
+      }
+
+      const snapshots = await Promise.all(runs.map((run) => fetchJson(`/runs/${run.run_id}.json`).catch((error) => ({ error, run }))));
+      content.innerHTML = snapshots.map((snapshot) => snapshot.error ? renderRunError(snapshot) : renderRun(snapshot)).join("");
+      for (const row of document.querySelectorAll("[data-task-url]")) {
+        row.addEventListener("click", () => openTask(row.dataset.taskUrl));
+      }
+    }
+
+    function renderRunError(item) {
+      return `<article class="run"><div class="error">Unable to load run ${escapeHtml(item.run.run_id)}: ${escapeHtml(item.error.message)}</div></article>`;
+    }
+
+    function renderRun(snapshot) {
+      const run = snapshot.run;
+      const counts = ["PENDING", "READY", "IN_PROGRESS", "EVALUATING", "BACKOFF", "COMPLETED", "UNKNOWN", "MISSING"].map((key) => {
+        const value = run.status_counts?.[key] || (key === "MISSING" ? run.missing_status_count : 0);
+        if (!value) return "";
+        return `<span class="count"><span>${key}</span><b>${value}</b></span>`;
+      }).join("");
+      const tasks = (snapshot.tasks || []).map((task) => `
+        <article class="task-card status-${escapeHtml(task.status.normalized)}" data-task-url="/runs/${run.run_id}/tasks/${encodeURIComponent(task.task_id)}.json">
+          <div class="task-top">
+            <div class="task-id mono truncate">${escapeHtml(task.task_id)}</div>
+            <span class="status ${escapeHtml(task.status.normalized)}">${escapeHtml(task.status.normalized)}</span>
+          </div>
+          <div class="task-title">${escapeHtml(task.title || task.task_id)}</div>
+          <div class="task-foot">
+            <div class="task-facts">
+              <span class="pill">${escapeHtml(task.dependencies.length)} deps</span>
+              ${task.is_next_pending ? `<span class="pill">next</span>` : ""}
+              ${task.dependencies_complete ? `<span class="pill">deps ok</span>` : `<span class="pill">waiting</span>`}
+            </div>
+            <span class="mono truncate">${escapeHtml(fmtTime(task.updated_at))}</span>
+          </div>
+        </article>
+      `).join("");
+      const signals = (snapshot.signals || []).map((signal) => `
+        <div class="signal"><b>${escapeHtml(signal.code)}</b><br>${escapeHtml(signal.message)}</div>
+      `).join("") || `<div class="signal">No signals.</div>`;
+      const events = (snapshot.recent_events || []).slice(0, 8).map((event) => `
+        <div class="event"><span class="mono">${escapeHtml(event.status)}</span> ${escapeHtml(event.task_id)}<br>${escapeHtml(fmtTime(event.updated_at))}</div>
+      `).join("") || `<div class="event">No recent events.</div>`;
+
+      return `
+        <article class="run">
+          <header class="run-head">
+            <div>
+              <div class="run-title">
+                <h2>${escapeHtml(run.display_name || run.source_ref || run.run_id)}</h2>
+                <span class="pill">${escapeHtml(run.source_kind)}</span>
+                <span class="pill">${escapeHtml(run.status)}</span>
+              </div>
+              <div class="meta">
+                <span class="mono">${escapeHtml(run.run_id)}</span>
+                <span>${escapeHtml(run.task_count)} tasks</span>
+                <span>activity ${escapeHtml(fmtTime(run.last_activity_at))}</span>
+              </div>
+            </div>
+            <div class="counts">${counts}</div>
+          </header>
+          <div class="run-body">
+            <div class="main-track">
+              ${renderGraph(run, snapshot.tasks || [])}
+              <div class="task-grid">${tasks}</div>
+            </div>
+            <div class="run-footer">
+              <aside class="side">
+                <p class="section-title">Recent</p>
+                <div class="events">${events}</div>
+              </aside>
+              <aside class="side">
+                <p class="section-title">Signals</p>
+                <div class="signals">${signals}</div>
+              </aside>
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
+    function renderGraph(run, tasks) {
+      if (!tasks.length) return "";
+      const taskById = new Map(tasks.map((task) => [task.task_id, task]));
+      const depthMemo = new Map();
+
+      function depth(task, trail = new Set()) {
+        if (depthMemo.has(task.task_id)) return depthMemo.get(task.task_id);
+        if (trail.has(task.task_id)) return 0;
+        trail.add(task.task_id);
+        const parents = (task.dependencies || [])
+          .map((id) => taskById.get(id))
+          .filter(Boolean);
+        const value = parents.length
+          ? Math.max(...parents.map((parent) => depth(parent, new Set(trail)))) + 1
+          : 0;
+        depthMemo.set(task.task_id, value);
+        return value;
+      }
+
+      const columns = new Map();
+      for (const task of tasks) {
+        const level = depth(task);
+        if (!columns.has(level)) columns.set(level, []);
+        columns.get(level).push(task);
+      }
+
+      const columnsHtml = [...columns.keys()].sort((a, b) => a - b).map((level) => {
+        const nodes = columns.get(level)
+          .sort((a, b) => a.task_order - b.task_order)
+          .map((task) => {
+            const hasKnownDeps = (task.dependencies || []).some((id) => taskById.has(id));
+            return `
+              <button class="graph-node status-${escapeHtml(task.status.normalized)} ${hasKnownDeps ? "has-deps" : ""}" type="button" data-task-url="/runs/${run.run_id}/tasks/${encodeURIComponent(task.task_id)}.json">
+                <span class="graph-id mono truncate">${escapeHtml(task.task_id)}</span>
+                <span class="graph-title">${escapeHtml(task.title || task.task_id)}</span>
+                <span class="graph-status">${escapeHtml(task.status.normalized)}</span>
+              </button>
+            `;
+          }).join("");
+        return `<div class="graph-column">${nodes}</div>`;
+      }).join("");
+
+      return `
+        <section class="graph-panel">
+          <p class="section-title">Dependency Graph</p>
+          <div class="graph">${columnsHtml}</div>
+        </section>
+      `;
+    }
+
+    async function openTask(url) {
+      drawer.classList.add("open");
+      drawer.setAttribute("aria-hidden", "false");
+      drawerTitle.textContent = "Loading task";
+      drawerSubtitle.innerHTML = "";
+      drawerBody.innerHTML = `<div class="empty">Loading task detail.</div>`;
+      try {
+        const snapshot = await fetchJson(url);
+        const task = snapshot.task;
+        drawerTitle.textContent = task.title || task.task_id;
+        drawerSubtitle.innerHTML = `<span class="mono">${escapeHtml(task.run_id)}</span><span class="mono">${escapeHtml(task.task_id)}</span>`;
+        drawerBody.innerHTML = `
+          <div class="kv">
+            <div>Status</div><div class="mono">${escapeHtml(task.status.normalized)} ${task.status.raw ? `(${escapeHtml(task.status.raw)})` : ""}</div>
+            <div>Updated</div><div>${escapeHtml(fmtTime(task.updated_at))}</div>
+            <div>Dependencies</div><div class="mono">${escapeHtml(task.dependencies.join(", ") || "none")}</div>
+            <div>Dependencies complete</div><div>${task.dependencies_complete ? "yes" : "no"}</div>
+            <div>Next pending</div><div>${task.is_next_pending ? "yes" : "no"}</div>
+          </div>
+          <p class="section-title">Raw task JSON</p>
+          <pre>${escapeHtml(JSON.stringify(task.raw_task, null, 2))}</pre>
+        `;
+      } catch (error) {
+        drawerBody.innerHTML = `<div class="error">Unable to load task: ${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function closeDrawer() {
+      drawer.classList.remove("open");
+      drawer.setAttribute("aria-hidden", "true");
+    }
+
+    load();
+    setInterval(load, 10000);
+  </script>
+</body>
+</html>

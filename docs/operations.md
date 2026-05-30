@@ -34,7 +34,9 @@ DATABASE_URL is not set. Set it explicitly, e.g. DATABASE_URL=postgres://user@lo
 
 ```text
 LimeNet connecting to database localhost:5432/limenet...
-LimeNet task orchestrator starting on 0.0.0.0:3000...
+LimeNet status API starting on 127.0.0.1:6988...
+LimeNet dashboard starting on 127.0.0.1:6989...
+LimeNet task orchestrator starting on 127.0.0.1:6987...
 ```
 
 ### 2. 执行迁移
@@ -52,7 +54,14 @@ cargo run
 默认监听：
 
 ```text
-0.0.0.0:3000
+127.0.0.1:6987
+```
+
+默认还会启动两个只读观察端口：
+
+```text
+Status JSON: 127.0.0.1:6988
+Dashboard:   127.0.0.1:6989
 ```
 
 ### 4. 修改监听地址或端口
@@ -63,6 +72,16 @@ cargo run
 export LIMENET_BIND=127.0.0.1:8080
 cargo run
 ```
+
+观察端口可以显式覆盖：
+
+```bash
+export LIMENET_STATUS_BIND=127.0.0.1:8081
+export LIMENET_DASHBOARD_BIND=127.0.0.1:8082
+cargo run
+```
+
+如果未设置，状态端口会从任务端口 + 1 推导，dashboard 端口会从状态端口 + 1 推导。
 
 启动日志会打印实际解析后的地址，例如：
 
@@ -75,7 +94,7 @@ LimeNet task orchestrator starting on 127.0.0.1:8080...
 推荐的新路径是：一个 LimeNet 服务端口承载多个 run，每个 run 用独立 `run_id` 隔离任务图。
 
 ```bash
-curl -fsS -X POST http://127.0.0.1:3000/api/v1/runs \
+curl -fsS -X POST http://127.0.0.1:6987/api/v1/runs \
   -H 'Content-Type: application/json' \
   --data '{"display_name":"PORT-24H-011","source_kind":"task","source_ref":"PORT-24H-011"}'
 ```
@@ -83,7 +102,7 @@ curl -fsS -X POST http://127.0.0.1:3000/api/v1/runs \
 随后使用 run-scoped graph API：
 
 ```bash
-curl -fsS http://127.0.0.1:3000/api/v1/runs/<run_id>/summary
+curl -fsS http://127.0.0.1:6987/api/v1/runs/<run_id>/summary
 ```
 
 这种方式不需要为每个并行任务分配新端口或新数据库，适合后续 dashboard 从同一个 base URL 汇总所有 run。
@@ -105,7 +124,7 @@ psql -c "CREATE DATABASE limenet_shared;"
 ```bash
 # 本地任务实例（本地开发、CI 测试）
 export DATABASE_URL=postgres://chenhui@localhost:5432/limenet_local
-export LIMENET_BIND=127.0.0.1:3000
+export LIMENET_BIND=127.0.0.1:6987
 cargo run
 ```
 
@@ -129,7 +148,7 @@ cargo run
 # 本地开发实例
 export LIMENET_INSTANCE_ID=local-task
 export DATABASE_URL=postgres://chenhui@localhost:5432/limenet_local
-export LIMENET_BIND=127.0.0.1:3000
+export LIMENET_BIND=127.0.0.1:6987
 cargo run
 ```
 
@@ -148,7 +167,7 @@ cargo run
 启动后访问 `/health` 端点即可确认当前实例的身份：
 
 ```bash
-curl http://127.0.0.1:3000/health
+curl http://127.0.0.1:6987/health
 ```
 
 示例输出：
@@ -158,7 +177,7 @@ curl http://127.0.0.1:3000/health
   "status": "healthy",
   "instance_id": "local-task",
   "database_target": "localhost:5432/limenet_local",
-  "bind_address": "127.0.0.1:3000"
+  "bind_address": "127.0.0.1:6987"
 }
 ```
 
@@ -175,6 +194,23 @@ export DATABASE_URL=postgres://chenhui@localhost:5432/limenet?options=-csearch_p
 - `DependencyResolver`: 每 2 秒扫描一次
 - `LeaseReaper`: 每 60 秒扫描一次
 - `BackoffAwakener`: 每 30 秒扫描一次
+
+## 观察 Dashboard
+
+启动后可以打开 dashboard：
+
+```text
+http://127.0.0.1:6989
+```
+
+AI agent 或脚本应优先读取状态 JSON：
+
+```bash
+curl http://127.0.0.1:6988/status.json
+curl http://127.0.0.1:6988/runs/<run_id>.json
+```
+
+`status.json` 是全局轻量摘要，不包含完整 task payload。需要某个 run 或 task 的细节时使用 scoped URL。
 
 ## 示例任务图
 
@@ -208,8 +244,8 @@ export DATABASE_URL=postgres://chenhui@localhost:5432/limenet?options=-csearch_p
 - `capabilities` 已接收但暂未参与任务筛选
 - 若任务没有配置 `validation_script`，当前实现会停留在 `EVALUATING`
 - 依赖解锁当前主要依赖轮询，不是纯事件驱动
-- 配置项已环境变量化（`DATABASE_URL`、`LIMENET_BIND`、`LIMENET_INSTANCE_ID`），其他参数仍以代码内默认值为主
-- 目前没有 Web UI、鉴权、分布式部署或隔离沙箱
+- 配置项已环境变量化（`DATABASE_URL`、`LIMENET_BIND`、`LIMENET_STATUS_BIND`、`LIMENET_DASHBOARD_BIND`、`LIMENET_INSTANCE_ID`），其他参数仍以代码内默认值为主
+- 观察 dashboard 是只读 UI，没有鉴权、分布式部署或隔离沙箱
 
 ## 文档维护建议
 
