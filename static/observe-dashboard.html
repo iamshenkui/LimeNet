@@ -15,6 +15,10 @@
       --accent: #2f7d68;
       --warn: #a16207;
       --risk: #b42318;
+      --done: #2f7d68;
+      --active: #2563eb;
+      --pending: #b7791f;
+      --blocked: #b42318;
       --mono: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
       --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
@@ -133,8 +137,7 @@
     .count b { color: var(--ink); }
     .run-body {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 300px;
-      gap: 16px;
+      gap: 14px;
       align-items: start;
     }
     .main-track {
@@ -180,20 +183,40 @@
       inset: 0 auto 0 0;
       width: 3px;
       border-radius: 8px 0 0 8px;
-      background: var(--accent);
+      background: var(--pending);
+    }
+    .graph-node.status-PENDING,
+    .graph-node.status-READY {
+      border-color: rgba(183, 121, 31, 0.38);
+      background: #fffbeb;
     }
     .graph-node.status-IN_PROGRESS,
     .graph-node.status-EVALUATING {
-      border-color: #86a99e;
-      box-shadow: 0 0 0 1px rgba(47, 125, 104, 0.12);
+      border-color: rgba(37, 99, 235, 0.38);
+      background: #eff6ff;
+      box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.10);
+    }
+    .graph-node.status-IN_PROGRESS::before,
+    .graph-node.status-EVALUATING::before {
+      background: var(--active);
     }
     .graph-node.status-COMPLETED {
       background: #f6faf8;
+      border-color: rgba(47, 125, 104, 0.38);
       color: #315d50;
+    }
+    .graph-node.status-COMPLETED::before {
+      background: var(--done);
     }
     .graph-node.status-BACKOFF::before,
     .graph-node.status-UNKNOWN::before,
-    .graph-node.status-MISSING::before { background: var(--warn); }
+    .graph-node.status-MISSING::before { background: var(--blocked); }
+    .graph-node.status-BACKOFF,
+    .graph-node.status-UNKNOWN,
+    .graph-node.status-MISSING {
+      border-color: rgba(180, 35, 24, 0.38);
+      background: #fff5f5;
+    }
     .graph-node:hover {
       border-color: #aeb8c3;
       box-shadow: 0 8px 20px rgba(24, 24, 27, 0.06);
@@ -222,12 +245,15 @@
     .graph-status {
       font-family: var(--mono);
       font-size: 11px;
-      color: var(--accent);
+      color: inherit;
     }
     .task-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 12px;
+      max-height: 560px;
+      overflow-y: auto;
+      padding-right: 4px;
     }
     .task-card {
       position: relative;
@@ -248,11 +274,38 @@
       inset: 0 auto 0 0;
       width: 3px;
       border-radius: 8px 0 0 8px;
-      background: var(--accent);
+      background: var(--pending);
+    }
+    .task-card.status-PENDING,
+    .task-card.status-READY {
+      border-color: rgba(183, 121, 31, 0.38);
+      background: #fffbeb;
+    }
+    .task-card.status-IN_PROGRESS,
+    .task-card.status-EVALUATING {
+      border-color: rgba(37, 99, 235, 0.38);
+      background: #eff6ff;
+    }
+    .task-card.status-IN_PROGRESS::before,
+    .task-card.status-EVALUATING::before {
+      background: var(--active);
+    }
+    .task-card.status-COMPLETED {
+      border-color: rgba(47, 125, 104, 0.38);
+      background: #f6faf8;
+    }
+    .task-card.status-COMPLETED::before {
+      background: var(--done);
     }
     .task-card.status-BACKOFF::before,
     .task-card.status-UNKNOWN::before,
-    .task-card.status-MISSING::before { background: var(--warn); }
+    .task-card.status-MISSING::before { background: var(--blocked); }
+    .task-card.status-BACKOFF,
+    .task-card.status-UNKNOWN,
+    .task-card.status-MISSING {
+      border-color: rgba(180, 35, 24, 0.38);
+      background: #fff5f5;
+    }
     .task-card:hover {
       border-color: #aeb8c3;
       box-shadow: 0 10px 24px rgba(24, 24, 27, 0.06);
@@ -296,15 +349,21 @@
     .status {
       font-family: var(--mono);
       font-size: 12px;
-      color: var(--accent);
+      color: var(--pending);
       white-space: nowrap;
     }
-    .status.UNKNOWN, .status.MISSING { color: var(--warn); }
-    .status.BACKOFF { color: var(--risk); }
+    .status.COMPLETED { color: var(--done); }
+    .status.IN_PROGRESS, .status.EVALUATING { color: var(--active); }
+    .status.UNKNOWN, .status.MISSING, .status.BACKOFF { color: var(--blocked); }
     .truncate {
       overflow: hidden;
       white-space: nowrap;
       text-overflow: ellipsis;
+    }
+    .run-footer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 12px;
     }
     .side {
       background: var(--panel);
@@ -387,7 +446,7 @@
 
     @media (max-width: 900px) {
       .shell { width: min(100% - 20px, 1480px); padding-top: 12px; }
-      .topbar, .run-head, .run-body { grid-template-columns: 1fr; }
+      .topbar, .run-head, .run-footer { grid-template-columns: 1fr; }
       .statusline, .counts { justify-content: flex-start; }
       .task-grid { grid-template-columns: 1fr; }
       .graph { grid-auto-columns: minmax(170px, 190px); gap: 20px; }
@@ -544,12 +603,16 @@
               ${renderGraph(run, snapshot.tasks || [])}
               <div class="task-grid">${tasks}</div>
             </div>
-            <aside class="side">
-              <p class="section-title">Signals</p>
-              <div class="signals">${signals}</div>
-              <p class="section-title">Recent</p>
-              <div class="events">${events}</div>
-            </aside>
+            <div class="run-footer">
+              <aside class="side">
+                <p class="section-title">Recent</p>
+                <div class="events">${events}</div>
+              </aside>
+              <aside class="side">
+                <p class="section-title">Signals</p>
+                <div class="signals">${signals}</div>
+              </aside>
+            </div>
           </div>
         </article>
       `;
