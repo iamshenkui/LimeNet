@@ -77,20 +77,18 @@
     }
     .runs {
       display: grid;
-      gap: 18px;
+      gap: 28px;
     }
     .run {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      overflow: hidden;
+      border-top: 1px solid var(--line);
+      padding-top: 18px;
     }
     .run-head {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 16px;
-      padding: 16px;
-      border-bottom: 1px solid var(--line);
+      align-items: start;
+      margin-bottom: 14px;
     }
     .run-title {
       display: flex;
@@ -135,28 +133,79 @@
     .count b { color: var(--ink); }
     .run-body {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 320px;
-      gap: 0;
+      grid-template-columns: minmax(0, 1fr) 300px;
+      gap: 16px;
+      align-items: start;
     }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      table-layout: fixed;
+    .task-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 12px;
     }
-    th, td {
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--line);
-      text-align: left;
-      vertical-align: middle;
-      font-size: 13px;
+    .task-card {
+      position: relative;
+      min-height: 148px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      gap: 12px;
+      padding: 13px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
     }
-    th {
+    .task-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 3px;
+      border-radius: 8px 0 0 8px;
+      background: var(--accent);
+    }
+    .task-card.status-BACKOFF::before,
+    .task-card.status-UNKNOWN::before,
+    .task-card.status-MISSING::before { background: var(--warn); }
+    .task-card:hover {
+      border-color: #aeb8c3;
+      box-shadow: 0 10px 24px rgba(24, 24, 27, 0.06);
+      transform: translateY(-1px);
+    }
+    .task-card:active { transform: translateY(0); }
+    .task-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .task-id {
       color: var(--muted);
-      font-weight: 650;
-      background: #fbfbfc;
+      font-size: 12px;
+      min-width: 0;
     }
-    tr.task-row { cursor: pointer; }
-    tr.task-row:hover { background: #f8faf9; }
+    .task-title {
+      min-height: 42px;
+      font-size: 14px;
+      line-height: 1.35;
+      font-weight: 680;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .task-foot {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: end;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .task-facts {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
     .status {
       font-family: var(--mono);
       font-size: 12px;
@@ -171,7 +220,9 @@
       text-overflow: ellipsis;
     }
     .side {
-      border-left: 1px solid var(--line);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
       padding: 12px;
       min-width: 0;
     }
@@ -251,8 +302,7 @@
       .shell { width: min(100% - 20px, 1480px); padding-top: 12px; }
       .topbar, .run-head, .run-body { grid-template-columns: 1fr; }
       .statusline, .counts { justify-content: flex-start; }
-      .side { border-left: 0; border-top: 1px solid var(--line); }
-      th:nth-child(4), td:nth-child(4) { display: none; }
+      .task-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -360,13 +410,21 @@
         return `<span class="count"><span>${key}</span><b>${value}</b></span>`;
       }).join("");
       const tasks = (snapshot.tasks || []).map((task) => `
-        <tr class="task-row" data-task-url="/runs/${run.run_id}/tasks/${encodeURIComponent(task.task_id)}.json">
-          <td class="mono truncate">${escapeHtml(task.task_id)}</td>
-          <td><div class="truncate">${escapeHtml(task.title || "")}</div></td>
-          <td><span class="status ${escapeHtml(task.status.normalized)}">${escapeHtml(task.status.normalized)}</span></td>
-          <td class="mono">${escapeHtml(task.dependencies.length)}</td>
-          <td class="mono truncate">${escapeHtml(fmtTime(task.updated_at))}</td>
-        </tr>
+        <article class="task-card status-${escapeHtml(task.status.normalized)}" data-task-url="/runs/${run.run_id}/tasks/${encodeURIComponent(task.task_id)}.json">
+          <div class="task-top">
+            <div class="task-id mono truncate">${escapeHtml(task.task_id)}</div>
+            <span class="status ${escapeHtml(task.status.normalized)}">${escapeHtml(task.status.normalized)}</span>
+          </div>
+          <div class="task-title">${escapeHtml(task.title || task.task_id)}</div>
+          <div class="task-foot">
+            <div class="task-facts">
+              <span class="pill">${escapeHtml(task.dependencies.length)} deps</span>
+              ${task.is_next_pending ? `<span class="pill">next</span>` : ""}
+              ${task.dependencies_complete ? `<span class="pill">deps ok</span>` : `<span class="pill">waiting</span>`}
+            </div>
+            <span class="mono truncate">${escapeHtml(fmtTime(task.updated_at))}</span>
+          </div>
+        </article>
       `).join("");
       const signals = (snapshot.signals || []).map((signal) => `
         <div class="signal"><b>${escapeHtml(signal.code)}</b><br>${escapeHtml(signal.message)}</div>
@@ -393,14 +451,7 @@
             <div class="counts">${counts}</div>
           </header>
           <div class="run-body">
-            <div>
-              <table>
-                <thead>
-                  <tr><th>Task</th><th>Title</th><th>Status</th><th>Deps</th><th>Updated</th></tr>
-                </thead>
-                <tbody>${tasks}</tbody>
-              </table>
-            </div>
+            <div class="task-grid">${tasks}</div>
             <aside class="side">
               <p class="section-title">Signals</p>
               <div class="signals">${signals}</div>
