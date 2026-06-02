@@ -25,7 +25,7 @@ use limenet::observe::{
 use limenet::state::{
     BackoffAwakener, BatchError, BatchTaskInput, CreateRunInput, DEFAULT_RUN_ID,
     DependencyResolver, GraphTaskInsertError, HeartbeatError, LeaseReaper, SubmitError,
-    SubmitRequest, TaskRepository,
+    SubmitRequest, TaskProgressInput, TaskRepository, TaskResultInput, TaskViewError,
 };
 
 #[derive(Clone)]
@@ -232,6 +232,84 @@ async fn get_graph_task_for_run(
             Json(json!({ "error": err.to_string() })),
         )
             .into_response(),
+    }
+}
+
+fn task_view_error_response(err: TaskViewError) -> Response {
+    match err {
+        TaskViewError::NotFound => StatusCode::NOT_FOUND.into_response(),
+        TaskViewError::HashMismatch => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "task_hash_mismatch",
+                "message": "No task in this run matches the supplied task_hash."
+            })),
+        )
+            .into_response(),
+        TaskViewError::InvalidTaskPayload => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_task_payload" })),
+        )
+            .into_response(),
+        TaskViewError::SqlxError(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_task_view_by_hash(
+    State(state): State<Arc<AppState>>,
+    Path((run_id, task_hash)): Path<(uuid::Uuid, String)>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
+    }
+
+    match repo.get_task_view_by_hash(run_id, &task_hash).await {
+        Ok(Some(view)) => (StatusCode::OK, Json(view)).into_response(),
+        Ok(None) => task_view_error_response(TaskViewError::NotFound),
+        Err(err) => task_view_error_response(err),
+    }
+}
+
+async fn append_task_progress_by_hash(
+    State(state): State<Arc<AppState>>,
+    Path((run_id, task_hash)): Path<(uuid::Uuid, String)>,
+    Json(payload): Json<TaskProgressInput>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
+    }
+
+    match repo
+        .append_task_progress_by_hash(run_id, &task_hash, payload)
+        .await
+    {
+        Ok(view) => (StatusCode::OK, Json(view)).into_response(),
+        Err(err) => task_view_error_response(err),
+    }
+}
+
+async fn submit_task_result_by_hash(
+    State(state): State<Arc<AppState>>,
+    Path((run_id, task_hash)): Path<(uuid::Uuid, String)>,
+    Json(payload): Json<TaskResultInput>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
+    }
+
+    match repo
+        .submit_task_result_by_hash(run_id, &task_hash, payload)
+        .await
+    {
+        Ok(view) => (StatusCode::OK, Json(view)).into_response(),
+        Err(err) => task_view_error_response(err),
     }
 }
 
@@ -948,6 +1026,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/v1/runs/{run_id}/graph/tasks/{task_id}",
             get(get_graph_task_for_run).put(upsert_graph_task_for_run),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/task-views/{task_hash}",
+            get(get_task_view_by_hash),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/task-views/{task_hash}/progress",
+            post(append_task_progress_by_hash),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/task-views/{task_hash}/result",
+            post(submit_task_result_by_hash),
         )
         .route(
             "/api/v1/graph/tasks",

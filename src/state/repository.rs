@@ -1,7 +1,8 @@
 use crate::contracts::{Lease, Payload, RetryLogic, Task, TaskRow, TaskStatus};
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
@@ -79,6 +80,40 @@ pub struct RunTimelineEvent {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskView {
+    pub run_id: Uuid,
+    pub task_id: String,
+    pub hash_algorithm: String,
+    pub task_hash: String,
+    pub task: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskProgressInput {
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub details: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskResultInput {
+    pub result_summary: String,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum TaskViewError {
+    NotFound,
+    HashMismatch,
+    InvalidTaskPayload,
+    SqlxError(sqlx::Error),
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct BatchTaskInput {
     pub task_id: Uuid,
@@ -141,6 +176,53 @@ impl From<sqlx::Error> for BatchError {
     fn from(err: sqlx::Error) -> Self {
         BatchError::SqlxError(err)
     }
+}
+
+impl From<sqlx::Error> for TaskViewError {
+    fn from(err: sqlx::Error) -> Self {
+        TaskViewError::SqlxError(err)
+    }
+}
+
+pub fn graph_task_hash(run_id: Uuid, task_id: &str, task_data: &Value) -> String {
+    let canonical = json!({
+        "run_id": run_id,
+        "task_id": task_id,
+        "task": task_data,
+    });
+    let encoded = serde_json::to_vec(&canonical).unwrap_or_default();
+    let digest = Sha256::digest(encoded);
+    format!("{digest:x}")
+}
+
+fn task_view(run_id: Uuid, task_id: String, task: Value) -> TaskView {
+    let task_hash = graph_task_hash(run_id, &task_id, &task);
+    TaskView {
+        run_id,
+        task_id,
+        hash_algorithm: "sha256".to_string(),
+        task_hash,
+        task,
+    }
+}
+
+fn ensure_object(value: &mut Value) -> Result<&mut Map<String, Value>, TaskViewError> {
+    value
+        .as_object_mut()
+        .ok_or(TaskViewError::InvalidTaskPayload)
+}
+
+fn ensure_metadata(task: &mut Value) -> Result<&mut Map<String, Value>, TaskViewError> {
+    let object = ensure_object(task)?;
+    let metadata = object
+        .entry("metadata")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !metadata.is_object() {
+        *metadata = Value::Object(Map::new());
+    }
+    metadata
+        .as_object_mut()
+        .ok_or(TaskViewError::InvalidTaskPayload)
 }
 
 impl<'a> TaskRepository<'a> {
@@ -450,6 +532,119 @@ impl<'a> TaskRepository<'a> {
         .fetch_optional(self.pool)
         .await?;
         Ok(row.map(|(task_data,)| task_data))
+    }
+
+    pub async fn get_task_view_by_hash(
+        &self,
+        run_id: Uuid,
+        task_hash: &str,
+    ) -> Result<Option<TaskView>, TaskViewError> {
+        let rows: Vec<(String, Value)> = sqlx::query_as(
+            "SELECT task_id, task_data FROM graph_tasks WHERE run_id = $1 ORDER BY task_order ASC",
+        )
+        .bind(run_id)
+        .fetch_all(self.pool)
+        .await?;
+
+        for (task_id, task_data) in rows {
+            if graph_task_hash(run_id, &task_id, &task_data) == task_hash {
+                return Ok(Some(task_view(run_id, task_id, task_data)));
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn append_task_progress_by_hash(
+        &self,
+        run_id: Uuid,
+        task_hash: &str,
+        input: TaskProgressInput,
+    ) -> Result<TaskView, TaskViewError> {
+        let mut tx = self.pool.begin().await?;
+        let rows: Vec<(String, Value)> = sqlx::query_as(
+            "SELECT task_id, task_data FROM graph_tasks WHERE run_id = $1 ORDER BY task_order ASC",
+        )
+        .bind(run_id)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        for (task_id, mut task_data) in rows {
+            if graph_task_hash(run_id, &task_id, &task_data) != task_hash {
+                continue;
+            }
+            let metadata = ensure_metadata(&mut task_data)?;
+            let progress = metadata
+                .entry("worker_progress")
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if !progress.is_array() {
+                *progress = Value::Array(Vec::new());
+            }
+            progress
+                .as_array_mut()
+                .ok_or(TaskViewError::InvalidTaskPayload)?
+                .push(json!({
+                    "summary": input.summary,
+                    "details": input.details,
+                    "recorded_at": Utc::now(),
+                }));
+
+            sqlx::query("UPDATE graph_tasks SET task_data = $1 WHERE run_id = $2 AND task_id = $3")
+                .bind(&task_data)
+                .bind(run_id)
+                .bind(&task_id)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            return Ok(task_view(run_id, task_id, task_data));
+        }
+
+        tx.commit().await?;
+        Err(TaskViewError::HashMismatch)
+    }
+
+    pub async fn submit_task_result_by_hash(
+        &self,
+        run_id: Uuid,
+        task_hash: &str,
+        input: TaskResultInput,
+    ) -> Result<TaskView, TaskViewError> {
+        let mut tx = self.pool.begin().await?;
+        let rows: Vec<(String, Value)> = sqlx::query_as(
+            "SELECT task_id, task_data FROM graph_tasks WHERE run_id = $1 ORDER BY task_order ASC",
+        )
+        .bind(run_id)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        for (task_id, mut task_data) in rows {
+            if graph_task_hash(run_id, &task_id, &task_data) != task_hash {
+                continue;
+            }
+            let object = ensure_object(&mut task_data)?;
+            let status = input.status.unwrap_or_else(|| "evaluating".to_string());
+            object.insert("status".to_string(), Value::String(status));
+            let metadata = ensure_metadata(&mut task_data)?;
+            metadata.insert(
+                "worker_result".to_string(),
+                json!({
+                    "result_summary": input.result_summary,
+                    "evidence_refs": input.evidence_refs,
+                    "recorded_at": Utc::now(),
+                }),
+            );
+
+            sqlx::query("UPDATE graph_tasks SET task_data = $1 WHERE run_id = $2 AND task_id = $3")
+                .bind(&task_data)
+                .bind(run_id)
+                .bind(&task_id)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            return Ok(task_view(run_id, task_id, task_data));
+        }
+
+        tx.commit().await?;
+        Err(TaskViewError::HashMismatch)
     }
 
     pub async fn replace_graph_tasks(&self, tasks: &[Value]) -> sqlx::Result<()> {
@@ -1535,6 +1730,86 @@ mod tests {
 
         cleanup_run(&pool, run_a).await;
         cleanup_run(&pool, run_b).await;
+    }
+
+    #[tokio::test]
+    async fn test_task_hash_is_run_scoped() {
+        let run_a = Uuid::new_v4();
+        let run_b = Uuid::new_v4();
+        let task = graph_task("same", Some("pending"), 10, &[]);
+
+        let hash_a = graph_task_hash(run_a, "same", &task);
+        let hash_b = graph_task_hash(run_b, "same", &task);
+
+        assert_ne!(hash_a, hash_b);
+    }
+
+    #[tokio::test]
+    async fn test_task_view_by_hash_returns_only_matching_task() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let run_id = Uuid::new_v4();
+
+        repo.ensure_run(run_id).await.unwrap();
+        let task_a = graph_task("a", Some("pending"), 10, &[]);
+        let task_b = graph_task("b", Some("pending"), 9, &[]);
+        repo.replace_graph_tasks_for_run(run_id, &[task_a.clone(), task_b])
+            .await
+            .unwrap();
+
+        let task_hash = graph_task_hash(run_id, "a", &task_a);
+        let view = repo
+            .get_task_view_by_hash(run_id, &task_hash)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(view.task_id, "a");
+        assert_eq!(view.task_hash, task_hash);
+        assert_eq!(graph_task_id(&view.task).as_deref(), Some("a"));
+
+        cleanup_run(&pool, run_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_task_progress_hash_must_match_current_task_snapshot() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let run_id = Uuid::new_v4();
+
+        repo.ensure_run(run_id).await.unwrap();
+        let task = graph_task("a", Some("pending"), 10, &[]);
+        repo.replace_graph_tasks_for_run(run_id, &[task.clone()])
+            .await
+            .unwrap();
+
+        let old_hash = graph_task_hash(run_id, "a", &task);
+        let updated_view = repo
+            .append_task_progress_by_hash(
+                run_id,
+                &old_hash,
+                TaskProgressInput {
+                    summary: "started".to_string(),
+                    details: vec!["sandbox ready".to_string()],
+                },
+            )
+            .await
+            .unwrap();
+        assert_ne!(updated_view.task_hash, old_hash);
+        assert!(matches!(
+            repo.append_task_progress_by_hash(
+                run_id,
+                &old_hash,
+                TaskProgressInput {
+                    summary: "stale".to_string(),
+                    details: vec![],
+                },
+            )
+            .await,
+            Err(TaskViewError::HashMismatch)
+        ));
+
+        cleanup_run(&pool, run_id).await;
     }
 
     #[tokio::test]
