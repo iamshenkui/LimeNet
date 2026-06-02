@@ -5,6 +5,16 @@
 # Do not change verified provider base URLs unless you intend to switch endpoints.
 schema_version: 2
 state_backend: local_limenet
+execution_backend: opensandbox
+
+opensandbox:
+  auth_mode: none
+  domain_env: OPENSANDBOX_DOMAIN
+  image_env: OPENSANDBOX_IMAGE
+  base_ref: master
+  publish_attempt_refs: true
+  attempt_remote: origin
+  attempt_branch_prefix: meta-agent/attempt
 
 limenet:
   base_url: http://127.0.0.1:3100
