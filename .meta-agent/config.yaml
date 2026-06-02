@@ -11,7 +11,7 @@ opensandbox:
   auth_mode: none
   domain_env: OPENSANDBOX_DOMAIN
   image_env: OPENSANDBOX_IMAGE
-  base_ref: master
+  base_ref: origin/main
   publish_attempt_refs: true
   attempt_remote: origin
   attempt_branch_prefix: meta-agent/attempt
