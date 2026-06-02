@@ -544,7 +544,7 @@
         return;
       }
 
-      const snapshots = await Promise.all(runs.map((run) => fetchJson(`/runs/${run.run_id}.json`).catch((error) => ({ error, run }))));
+      const snapshots = await Promise.all(runs.map((run) => fetchJson(`/runs/${run.run_id}/snapshot.json`).catch((error) => ({ error, run }))));
       content.innerHTML = snapshots.map((snapshot) => snapshot.error ? renderRunError(snapshot) : renderRun(snapshot)).join("");
       for (const row of document.querySelectorAll("[data-task-url]")) {
         row.addEventListener("click", () => openTask(row.dataset.taskUrl));
@@ -563,7 +563,7 @@
         return `<span class="count"><span>${key}</span><b>${value}</b></span>`;
       }).join("");
       const tasks = (snapshot.tasks || []).map((task) => `
-        <article class="task-card status-${escapeHtml(task.status.normalized)}" data-task-url="/runs/${run.run_id}/tasks/${encodeURIComponent(task.task_id)}.json">
+        <article class="task-card status-${escapeHtml(task.status.normalized)}" data-task-url="/runs/${run.run_id}/tasks/${encodeURIComponent(task.task_id)}/snapshot.json">
           <div class="task-top">
             <div class="task-id mono truncate">${escapeHtml(task.task_id)}</div>
             <span class="status ${escapeHtml(task.status.normalized)}">${escapeHtml(task.status.normalized)}</span>
@@ -655,7 +655,7 @@
           .map((task) => {
             const hasKnownDeps = (task.dependencies || []).some((id) => taskById.has(id));
             return `
-              <button class="graph-node status-${escapeHtml(task.status.normalized)} ${hasKnownDeps ? "has-deps" : ""}" type="button" data-task-url="/runs/${run.run_id}/tasks/${encodeURIComponent(task.task_id)}.json">
+              <button class="graph-node status-${escapeHtml(task.status.normalized)} ${hasKnownDeps ? "has-deps" : ""}" type="button" data-task-url="/runs/${run.run_id}/tasks/${encodeURIComponent(task.task_id)}/snapshot.json">
                 <span class="graph-id mono truncate">${escapeHtml(task.task_id)}</span>
                 <span class="graph-title">${escapeHtml(task.title || task.task_id)}</span>
                 <span class="graph-status">${escapeHtml(task.status.normalized)}</span>

@@ -17,7 +17,7 @@ opensandbox:
   attempt_branch_prefix: meta-agent/attempt
 
 limenet:
-  base_url: http://127.0.0.1:3100
+  base_url: http://127.0.0.1:3587
   instance_profile: local
 
 providers:

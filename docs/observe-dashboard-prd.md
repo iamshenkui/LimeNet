@@ -73,11 +73,11 @@ Returns a global lightweight snapshot. It includes run summaries, normalized sta
 
 Returns all observed run summaries.
 
-`GET /runs/{run_id}.json`
+`GET /runs/{run_id}/snapshot.json`
 
 Returns the complete observation snapshot for one run, including ordered tasks and raw graph task JSON.
 
-`GET /runs/{run_id}/tasks/{task_id}.json`
+`GET /runs/{run_id}/tasks/{task_id}/snapshot.json`
 
 Returns one task observation with run context, inferred dependency state, and raw graph task JSON.
 
