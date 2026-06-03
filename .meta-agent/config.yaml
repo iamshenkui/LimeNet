@@ -12,6 +12,7 @@ opensandbox:
   domain_env: OPENSANDBOX_DOMAIN
   image_env: OPENSANDBOX_IMAGE
   base_ref: origin/main
+  timeout_minutes: 180
   publish_attempt_refs: true
   attempt_remote: origin
   attempt_branch_prefix: meta-agent/attempt
