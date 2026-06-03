@@ -1,0 +1,8 @@
+{
+  "graph_id": "promotion-derived-graph",
+  "ownership_mode": "promotion",
+  "backend_kind": "json",
+  "created_from": "parent-integration-graph",
+  "promoted_from": "/state/backends/legacy-sqlite",
+  "canonical_backend_id": "postgres-backend"
+}

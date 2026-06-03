@@ -1,0 +1,5 @@
+{
+  "visibility_policy": "private",
+  "evidence_rollup_policy": "full",
+  "status_mapping_policy": "strict"
+}

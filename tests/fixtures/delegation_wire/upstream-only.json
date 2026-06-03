@@ -1,0 +1,8 @@
+{
+  "upstream_backend_id": "limenet-prod",
+  "upstream_work_request_id": "wr-int2b-003-g-004",
+  "downstream_domain_kind": "meta-agent",
+  "visibility_policy": "shared",
+  "evidence_rollup_policy": "summary",
+  "status_mapping_policy": "strict"
+}

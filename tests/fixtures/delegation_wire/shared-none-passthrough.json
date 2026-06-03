@@ -1,0 +1,6 @@
+{
+  "visibility_policy": "shared",
+  "evidence_rollup_policy": "none",
+  "status_mapping_policy": "passthrough",
+  "downstream_domain_kind": "graph"
+}

@@ -1,0 +1,49 @@
+[
+  {
+    "visibility_policy": "private",
+    "evidence_rollup_policy": "full",
+    "status_mapping_policy": "strict"
+  },
+  {
+    "delegation_id": "dg-int2b-003-g-006",
+    "upstream_domain_id": "limenet",
+    "downstream_domain_id": "local-meta-agent",
+    "delivery_contract_id": "dc-001",
+    "visibility_policy": "shared",
+    "evidence_rollup_policy": "summary",
+    "status_mapping_policy": "strict",
+    "trace_context": {"correlation_id": "corr-001"},
+    "upstream_work_request_id": "wr-int2b-003-g-006",
+    "upstream_task_id": "T-int2b-003-g-006",
+    "upstream_backend_id": "limenet-prod",
+    "downstream_domain_kind": "meta-agent",
+    "downstream_graph_id": "graph-int2b-003-g-006"
+  },
+  {
+    "upstream_backend_id": "limenet-prod",
+    "upstream_work_request_id": "wr-int2b-003-g-004",
+    "downstream_domain_kind": "meta-agent",
+    "visibility_policy": "shared",
+    "evidence_rollup_policy": "summary",
+    "status_mapping_policy": "strict"
+  },
+  {
+    "downstream_domain_kind": "meta-agent",
+    "downstream_graph_id": "graph-int2b-003-g-005",
+    "visibility_policy": "shared",
+    "evidence_rollup_policy": "summary",
+    "status_mapping_policy": "strict"
+  },
+  {
+    "visibility_policy": "public",
+    "evidence_rollup_policy": "full",
+    "status_mapping_policy": "loose",
+    "downstream_domain_kind": "graph"
+  },
+  {
+    "visibility_policy": "shared",
+    "evidence_rollup_policy": "none",
+    "status_mapping_policy": "passthrough",
+    "downstream_domain_kind": "graph"
+  }
+]

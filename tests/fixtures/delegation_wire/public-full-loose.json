@@ -1,0 +1,6 @@
+{
+  "visibility_policy": "public",
+  "evidence_rollup_policy": "full",
+  "status_mapping_policy": "loose",
+  "downstream_domain_kind": "graph"
+}

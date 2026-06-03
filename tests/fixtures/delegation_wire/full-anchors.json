@@ -1,0 +1,15 @@
+{
+  "delegation_id": "dg-int2b-003-g-006",
+  "upstream_domain_id": "limenet",
+  "downstream_domain_id": "local-meta-agent",
+  "delivery_contract_id": "dc-001",
+  "visibility_policy": "shared",
+  "evidence_rollup_policy": "summary",
+  "status_mapping_policy": "strict",
+  "trace_context": {"correlation_id": "corr-001"},
+  "upstream_work_request_id": "wr-int2b-003-g-006",
+  "upstream_task_id": "T-int2b-003-g-006",
+  "upstream_backend_id": "limenet-prod",
+  "downstream_domain_kind": "meta-agent",
+  "downstream_graph_id": "graph-int2b-003-g-006"
+}

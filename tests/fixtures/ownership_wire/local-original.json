@@ -1,0 +1,6 @@
+{
+  "graph_id": "local-original-graph",
+  "ownership_mode": "local_canonical",
+  "backend_kind": "json",
+  "canonical_backend_id": "json-backend"
+}

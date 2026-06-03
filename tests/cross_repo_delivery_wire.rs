@@ -38,14 +38,22 @@ use limenet::contracts::{DeliveryPackage, DeliveryStatus, EvidenceRollup};
 use std::fs;
 use std::path::PathBuf;
 
+/// Resolve the wire fixture directory, checking multiple candidate locations.
+///
+/// Primary: `<repo-parent>/.state/artifacts/delivery_wire/` (full workspace)
+/// Fallback: `<repo>/tests/fixtures/delivery_wire/` (OpenSandbox bundle)
 fn wire_dir() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
+    let primary = manifest_dir
         .parent()
         .unwrap()
         .join(".state")
         .join("artifacts")
-        .join("delivery_wire")
+        .join("delivery_wire");
+    if primary.exists() {
+        return primary;
+    }
+    manifest_dir.join("tests").join("fixtures").join("delivery_wire")
 }
 
 fn read_wire_fixture(name: &str) -> String {

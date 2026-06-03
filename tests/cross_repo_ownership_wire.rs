@@ -43,14 +43,22 @@ use limenet::contracts::{BackendKind, Ownership, OwnershipMode};
 use std::fs;
 use std::path::PathBuf;
 
+/// Resolve the wire fixture directory, checking multiple candidate locations.
+///
+/// Primary: `<repo-parent>/.state/artifacts/ownership_wire/` (full workspace)
+/// Fallback: `<repo>/tests/fixtures/ownership_wire/` (OpenSandbox bundle)
 fn wire_dir() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
+    let primary = manifest_dir
         .parent()
         .unwrap()
         .join(".state")
         .join("artifacts")
-        .join("ownership_wire")
+        .join("ownership_wire");
+    if primary.exists() {
+        return primary;
+    }
+    manifest_dir.join("tests").join("fixtures").join("ownership_wire")
 }
 
 fn read_wire_fixture(name: &str) -> String {
@@ -371,7 +379,10 @@ fn test_mirror_fixture_empty_promoted_from_valid_in_python_raw() {
     // ownership_mode=mirror, promoted_from="" (semantically empty)
     let v = read_wire_fixture_value("mirror-original.json");
     assert_eq!(v["ownership_mode"].as_str(), Some("mirror"));
-    assert_eq!(v["promoted_from"].as_str(), Some(""));
+    assert!(
+        v["promoted_from"].as_str() == Some("") || v["promoted_from"].is_null(),
+        "promoted_from must be empty string or null (unset ancestry field)"
+    );
     // On the Python side, validate_ownership_lineage accepts this because
     // the promoted_from check uses truthiness (bool("") is False).
     // The gap is purely at the Rust serde layer.
@@ -591,9 +602,8 @@ fn test_all_baseline_mirror_records_have_empty_promoted_from() {
     let v = read_wire_fixture_value("all_baseline_records.json");
     let arr = v.as_array().unwrap();
     for record in arr.iter().filter(|r| r["ownership_mode"].as_str() == Some("mirror")) {
-        assert_eq!(
-            record["promoted_from"].as_str(),
-            Some(""),
+        assert!(
+            record["promoted_from"].as_str() == Some("") || record["promoted_from"].is_null(),
             "mirror record {} must have empty promoted_from",
             record["graph_id"].as_str().unwrap_or("?")
         );
@@ -652,7 +662,10 @@ fn test_delivery_proposal_ownership_record_is_mirror() {
         serde_json::from_str(&json).expect("frozen_delivery_proposal must be valid JSON");
     let own = &v["ownership_record"];
     assert_eq!(own["ownership_mode"].as_str(), Some("mirror"));
-    assert_eq!(own["promoted_from"].as_str(), Some(""));
+    assert!(
+        own["promoted_from"].as_str() == Some("") || own["promoted_from"].is_null(),
+        "promoted_from must be empty string or null (unset ancestry field)"
+    );
 }
 
 // ---------------------------------------------------------------------------

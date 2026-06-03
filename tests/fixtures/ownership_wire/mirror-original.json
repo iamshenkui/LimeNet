@@ -1,0 +1,8 @@
+{
+  "graph_id": "mirror-original-graph",
+  "ownership_mode": "mirror",
+  "backend_kind": "json",
+  "created_from": "",
+  "promoted_from": "",
+  "canonical_backend_id": "json-backend"
+}

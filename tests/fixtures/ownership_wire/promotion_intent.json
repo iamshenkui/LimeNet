@@ -1,0 +1,12 @@
+{
+  "graph_id": "demo-project-graph",
+  "intent_type": "transfer",
+  "source_backend_id": "/state/graphs/demo-project",
+  "target_backend_id": "postgres://state/db/graphs",
+  "source_backend_kind": "json",
+  "target_backend_kind": "postgres",
+  "trace_context": {
+    "correlation_id": "run-promotion-fixture-001",
+    "task_id": "P2B-002-e"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "graph_id": "local-derived-graph",
+  "ownership_mode": "local_canonical",
+  "backend_kind": "json",
+  "created_from": "parent-integration-graph",
+  "canonical_backend_id": "json-backend"
+}

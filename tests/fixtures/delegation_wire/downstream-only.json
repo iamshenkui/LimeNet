@@ -1,0 +1,7 @@
+{
+  "downstream_domain_kind": "meta-agent",
+  "downstream_graph_id": "graph-int2b-003-g-005",
+  "visibility_policy": "shared",
+  "evidence_rollup_policy": "summary",
+  "status_mapping_policy": "strict"
+}

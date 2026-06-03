@@ -1,0 +1,22 @@
+{
+  "ownership_record": {
+    "ownership_mode": "mirror",
+    "backend_kind": "json",
+    "created_from": "parent-integration-graph",
+    "promoted_from": ""
+  },
+  "delegation_contract": {
+    "delegation_id": "del-001",
+    "downstream_domain_kind": "meta-agent"
+  },
+  "delivery_package": {
+    "package_id": "pkg-frozen-001",
+    "delivery_contract_id": "dc-frozen-001",
+    "delivery_status": "proposed"
+  },
+  "evidence_rollup": {
+    "evidence_rollup_id": "er-001",
+    "task_id": "task-001",
+    "summary": "test"
+  }
+}

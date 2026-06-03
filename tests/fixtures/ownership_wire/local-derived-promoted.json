@@ -1,0 +1,8 @@
+{
+  "graph_id": "local-derived-promoted-graph",
+  "ownership_mode": "local_canonical",
+  "backend_kind": "json",
+  "created_from": "parent-integration-graph",
+  "promoted_from": "/state/backends/legacy-sqlite",
+  "canonical_backend_id": "json-backend"
+}

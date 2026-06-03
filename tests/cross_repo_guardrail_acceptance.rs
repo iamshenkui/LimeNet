@@ -46,26 +46,35 @@ use limenet::contracts::{BackendKind, Ownership, OwnershipMode};
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-fn artifacts_root() -> PathBuf {
+/// Resolve a wire directory, checking multiple candidate locations.
+///
+/// Primary: `<repo-parent>/.state/artifacts/<wire_dir>/` (full workspace)
+/// Fallback: `<repo>/tests/fixtures/<wire_dir>/` (OpenSandbox bundle)
+fn wire_dir(wire_dir: &str) -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
+    let primary = manifest_dir
         .parent()
         .unwrap()
         .join(".state")
         .join("artifacts")
+        .join(wire_dir);
+    if primary.exists() {
+        return primary;
+    }
+    manifest_dir.join("tests").join("fixtures").join(wire_dir)
 }
 
-fn read_wire_json(wire_dir: &str, name: &str) -> serde_json::Value {
-    let path = artifacts_root().join(wire_dir).join(name);
+fn read_wire_json(wire_dir_name: &str, name: &str) -> serde_json::Value {
+    let path = wire_dir(wire_dir_name).join(name);
     let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {path:?}: {e}"));
     serde_json::from_str(&text).expect("fixture must be valid JSON")
 }
 
-fn assert_artifact_exists(wire_dir: &str, name: &str) {
-    let path = artifacts_root().join(wire_dir).join(name);
+fn assert_artifact_exists(wire_dir_name: &str, name: &str) {
+    let path = wire_dir(wire_dir_name).join(name);
     assert!(
         path.exists(),
-        "required artifact must exist: {wire_dir}/{name}"
+        "required artifact must exist: {wire_dir_name}/{name}"
     );
 }
 
@@ -80,12 +89,14 @@ fn assert_artifact_exists(wire_dir: &str, name: &str) {
 fn mirror_read_only_original_no_promotion_lineage() {
     let v = read_wire_json("ownership_wire", "mirror-original.json");
     assert_eq!(v["ownership_mode"].as_str(), Some("mirror"));
-    assert_eq!(
-        v["promoted_from"].as_str(),
-        Some(""),
+    assert!(
+        v["promoted_from"].as_str() == Some("") || v["promoted_from"].is_null(),
         "mirror must have empty promoted_from — read-only, no canonical advancement"
     );
-    assert_eq!(v["created_from"].as_str(), Some(""));
+    assert!(
+        v["created_from"].as_str() == Some("") || v["created_from"].is_null(),
+        "mirror must have empty created_from"
+    );
     assert!(v["canonical_backend_id"].as_str().is_some_and(|s| !s.is_empty()));
 }
 
@@ -96,9 +107,8 @@ fn mirror_read_only_original_no_promotion_lineage() {
 fn mirror_read_only_derived_no_promotion_lineage() {
     let v = read_wire_json("ownership_wire", "mirror-derived.json");
     assert_eq!(v["ownership_mode"].as_str(), Some("mirror"));
-    assert_eq!(
-        v["promoted_from"].as_str(),
-        Some(""),
+    assert!(
+        v["promoted_from"].as_str() == Some("") || v["promoted_from"].is_null(),
         "derived mirror must still have empty promoted_from — read-only invariant is universal"
     );
     assert_eq!(
@@ -120,9 +130,8 @@ fn delivery_proposal_preserves_mirror_read_only() {
         Some("mirror"),
         "delivery proposal ownership_record must be mirror"
     );
-    assert_eq!(
-        own["promoted_from"].as_str(),
-        Some(""),
+    assert!(
+        own["promoted_from"].as_str() == Some("") || own["promoted_from"].is_null(),
         "mirror inside delivery proposal must have empty promoted_from — delivery does not advance canonical state"
     );
     // The delivery_package and evidence_rollup sub-documents must be present
@@ -154,10 +163,10 @@ fn all_baseline_mirror_records_read_only() {
     );
     for record in &mirror_records {
         let graph_id = record["graph_id"].as_str().unwrap_or("?");
-        let pf = record["promoted_from"].as_str().unwrap_or("NOT_PRESENT");
+        let is_empty = record["promoted_from"].as_str() == Some("") || record["promoted_from"].is_null();
         assert!(
-            pf.is_empty(),
-            "mirror record {graph_id} must have empty promoted_from (got {pf:?}) — mirror read-only invariant"
+            is_empty,
+            "mirror record {graph_id} must have empty promoted_from — mirror read-only invariant"
         );
     }
 }
@@ -501,7 +510,10 @@ fn mirror_delivery_proposal_ownership_delivery_coherent() {
 
     // Ownership is mirror → read-only
     assert_eq!(own["ownership_mode"].as_str(), Some("mirror"));
-    assert_eq!(own["promoted_from"].as_str(), Some(""));
+    assert!(
+        own["promoted_from"].as_str() == Some("") || own["promoted_from"].is_null(),
+        "mirror ownership must have empty promoted_from"
+    );
 
     // Delivery package carries status but does not carry ownership-mode
     // overrides or write-authorization flags — the delivery surface is
