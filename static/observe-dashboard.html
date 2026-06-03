@@ -140,112 +140,287 @@
       gap: 14px;
       align-items: start;
     }
+    .milestone-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .milestone-card {
+      position: relative;
+      min-height: 154px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 12px;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      text-align: left;
+      cursor: pointer;
+    }
+    .milestone-card:hover {
+      border-color: #aeb8c3;
+      box-shadow: 0 10px 24px rgba(24, 24, 27, 0.06);
+    }
+    .milestone-top {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .milestone-id {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .milestone-title {
+      font-size: 15px;
+      line-height: 1.3;
+      font-weight: 720;
+    }
+    .milestone-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .progress {
+      height: 8px;
+      border-radius: 999px;
+      background: #eceff3;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: var(--done);
+    }
+    .task-section {
+      border-top: 1px solid var(--line);
+      padding-top: 18px;
+      scroll-margin-top: 18px;
+    }
+    .task-section-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: start;
+      margin-bottom: 12px;
+    }
+    .task-section h3 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.25;
+    }
+    .tree-panel {
+      display: grid;
+      gap: 10px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .task-tree {
+      display: grid;
+      gap: 10px;
+    }
+    .tree-node {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfc;
+      overflow: hidden;
+    }
+    .tree-node[open] {
+      background: var(--panel);
+    }
+    .tree-summary {
+      min-height: 64px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      cursor: pointer;
+    }
+    .tree-summary::-webkit-details-marker { display: none; }
+    .tree-title {
+      display: grid;
+      gap: 5px;
+      min-width: 0;
+    }
+    .tree-title strong {
+      font-size: 14px;
+      line-height: 1.3;
+    }
+    .tree-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .tree-children {
+      display: grid;
+      gap: 10px;
+      padding: 0 12px 12px 28px;
+      border-top: 1px solid var(--line);
+    }
+    .tree-leaf {
+      margin-left: 28px;
+    }
     .main-track {
       display: grid;
       gap: 14px;
       min-width: 0;
     }
-    .graph-panel {
+    .relationship-panel {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 12px;
-      overflow: auto;
+      overflow: hidden;
     }
-    .graph {
+    .relationship-header {
       display: grid;
-      grid-auto-flow: column;
-      grid-auto-columns: minmax(190px, 220px);
-      gap: 28px;
-      min-width: max-content;
-      padding: 4px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: end;
+      margin-bottom: 12px;
     }
-    .graph-column {
+    .relationship-caption {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .relationship-root {
       display: grid;
-      gap: 10px;
-      align-content: start;
+      gap: 5px;
+      padding: 12px;
+      border: 1px solid rgba(47, 125, 104, 0.34);
+      border-radius: 8px;
+      background: #f4faf7;
+      margin-bottom: 12px;
     }
-    .graph-node {
+    .relationship-root .task-id,
+    .relationship-row .task-id {
+      min-width: auto;
+    }
+    .relationship-tree {
       position: relative;
-      min-height: 72px;
       display: grid;
       gap: 8px;
-      padding: 10px 10px 10px 12px;
+      padding-left: 20px;
+    }
+    .relationship-tree::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 8px;
+      border-left: 1px solid var(--line);
+    }
+    .relationship-row {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(240px, 1fr) minmax(180px, 0.55fr) auto;
+      gap: 12px;
+      align-items: center;
+      min-height: 64px;
+      padding: 10px 12px;
+      color: inherit;
+      text-decoration: none;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #fbfcfc;
-      cursor: pointer;
-      text-align: left;
+      transition: border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
     }
-    .graph-node::before {
+    .relationship-row::before {
       content: "";
       position: absolute;
-      inset: 0 auto 0 0;
-      width: 3px;
-      border-radius: 8px 0 0 8px;
-      background: var(--pending);
-    }
-    .graph-node.status-PENDING,
-    .graph-node.status-READY {
-      border-color: rgba(183, 121, 31, 0.38);
-      background: #fffbeb;
-    }
-    .graph-node.status-IN_PROGRESS,
-    .graph-node.status-EVALUATING {
-      border-color: rgba(37, 99, 235, 0.38);
-      background: #eff6ff;
-      box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.10);
-    }
-    .graph-node.status-IN_PROGRESS::before,
-    .graph-node.status-EVALUATING::before {
-      background: var(--active);
-    }
-    .graph-node.status-COMPLETED {
-      background: #f6faf8;
-      border-color: rgba(47, 125, 104, 0.38);
-      color: #315d50;
-    }
-    .graph-node.status-COMPLETED::before {
-      background: var(--done);
-    }
-    .graph-node.status-BACKOFF::before,
-    .graph-node.status-UNKNOWN::before,
-    .graph-node.status-MISSING::before { background: var(--blocked); }
-    .graph-node.status-BACKOFF,
-    .graph-node.status-UNKNOWN,
-    .graph-node.status-MISSING {
-      border-color: rgba(180, 35, 24, 0.38);
-      background: #fff5f5;
-    }
-    .graph-node:hover {
-      border-color: #aeb8c3;
-      box-shadow: 0 8px 20px rgba(24, 24, 27, 0.06);
-    }
-    .graph-node.has-deps::after {
-      content: "";
-      position: absolute;
-      left: -29px;
       top: 50%;
-      width: 28px;
+      left: -13px;
+      width: 13px;
       border-top: 1px solid var(--line);
     }
-    .graph-id {
-      color: var(--muted);
-      font-size: 11px;
+    .relationship-row:hover {
+      border-color: #aeb8c3;
+      box-shadow: 0 8px 18px rgba(24, 24, 27, 0.05);
+      transform: translateY(-1px);
     }
-    .graph-title {
-      font-size: 12px;
-      line-height: 1.3;
-      font-weight: 660;
+    .relationship-main {
+      display: grid;
+      gap: 5px;
+      min-width: 0;
+      color: inherit;
+      text-decoration: none;
+    }
+    .relationship-title {
+      font-size: 13px;
+      line-height: 1.35;
+      font-weight: 680;
       overflow: hidden;
       display: -webkit-box;
       -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
     }
-    .graph-status {
+    .dependency-cell {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      min-width: 0;
+    }
+    .dependency-label {
+      width: 100%;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .dependency-chip {
+      display: inline-flex;
+      align-items: center;
+      max-width: 100%;
+      min-height: 22px;
+      padding: 0 7px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: #fff;
       font-family: var(--mono);
       font-size: 11px;
-      color: inherit;
+      text-decoration: none;
+    }
+    .dependency-chip.known {
+      color: var(--accent);
+      border-color: rgba(47, 125, 104, 0.28);
+      background: #f6faf8;
+    }
+    .relationship-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: flex-end;
+      color: var(--muted);
+      white-space: nowrap;
+      font-size: 12px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--pending);
+    }
+    .status-dot.COMPLETED { background: var(--done); }
+    .status-dot.IN_PROGRESS,
+    .status-dot.EVALUATING { background: var(--active); }
+    .status-dot.UNKNOWN,
+    .status-dot.MISSING,
+    .status-dot.BACKOFF { background: var(--blocked); }
+    .relationship-note {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
     }
     .task-grid {
       display: grid;
@@ -267,6 +442,8 @@
       border-radius: 8px;
       cursor: pointer;
       transition: border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+      color: inherit;
+      text-decoration: none;
     }
     .task-card::before {
       content: "";
@@ -392,6 +569,37 @@
       color: var(--muted);
     }
     .signal b { color: var(--warn); font-family: var(--mono); }
+    .page-head {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .breadcrumbs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .breadcrumbs a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .page-title {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+    .detail-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 0.45fr);
+      gap: 12px;
+      align-items: start;
+    }
     .drawer {
       position: fixed;
       inset: 0 0 0 auto;
@@ -448,9 +656,17 @@
       .shell { width: min(100% - 20px, 1480px); padding-top: 12px; }
       .topbar, .run-head, .run-footer { grid-template-columns: 1fr; }
       .statusline, .counts { justify-content: flex-start; }
+      .milestone-grid { grid-template-columns: 1fr; }
+      .task-section-head { grid-template-columns: 1fr; }
+      .detail-grid { grid-template-columns: 1fr; }
+      .tree-summary { grid-template-columns: 1fr; }
+      .tree-actions { justify-content: flex-start; }
+      .tree-children { padding-left: 12px; }
+      .tree-leaf { margin-left: 0; }
       .task-grid { grid-template-columns: 1fr; }
-      .graph { grid-auto-columns: minmax(170px, 190px); gap: 20px; }
-      .graph-node.has-deps::after { left: -21px; width: 20px; }
+      .relationship-header { grid-template-columns: 1fr; }
+      .relationship-row { grid-template-columns: 1fr; align-items: start; }
+      .relationship-status { justify-content: flex-start; }
     }
   </style>
 </head>
@@ -489,9 +705,11 @@
     const drawerSubtitle = document.getElementById("drawer-subtitle");
     const drawerBody = document.getElementById("drawer-body");
     let isLoading = false;
+    let state = { runs: [], snapshots: new Map(), instance: {} };
 
     document.getElementById("refresh-button").addEventListener("click", load);
     document.getElementById("drawer-close").addEventListener("click", closeDrawer);
+    window.addEventListener("hashchange", renderRoute);
 
     function escapeHtml(value) {
       return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -516,8 +734,15 @@
       refreshState.textContent = "refreshing";
       try {
         const snapshot = await fetchJson("/status.json");
+        state.instance = snapshot.instance || {};
+        state.runs = snapshot.runs || [];
+        state.snapshots = new Map();
+        const snapshots = await Promise.all(state.runs.map((run) => fetchJson(`/runs/${run.run_id}/snapshot.json`).catch((error) => ({ error, run }))));
+        for (const item of snapshots) {
+          if (!item.error) state.snapshots.set(item.run.run_id, indexSnapshot(item));
+        }
         renderInstance(snapshot);
-        await renderRuns(snapshot.runs || []);
+        renderRoute();
         refreshState.textContent = `updated ${fmtTime(snapshot.observed_at)}`;
       } catch (error) {
         content.innerHTML = `<div class="error">Unable to load observe snapshot: ${escapeHtml(error.message)}</div>`;
@@ -538,32 +763,213 @@
       ].map(([label, value]) => `<span><b>${label}</b> <span class="mono">${escapeHtml(value)}</span></span>`).join("");
     }
 
-    async function renderRuns(runs) {
-      if (!runs.length) {
+    function indexSnapshot(snapshot) {
+      const byId = new Map();
+      const children = new Map();
+      for (const task of snapshot.tasks || []) {
+        byId.set(task.task_id, task);
+      }
+      for (const task of snapshot.tasks || []) {
+        const parentId = task.raw_task?.parent_task_id;
+        const key = parentId && byId.has(parentId) ? parentId : "__root__";
+        if (!children.has(key)) children.set(key, []);
+        children.get(key).push(task);
+      }
+      for (const list of children.values()) list.sort(compareTasks);
+      return { ...snapshot, byId, children, rollups: new Map() };
+    }
+
+    function compareTasks(a, b) {
+      return (a.task_order ?? 0) - (b.task_order ?? 0)
+        || String(a.task_id).localeCompare(String(b.task_id));
+    }
+
+    function parseRoute() {
+      const hash = window.location.hash || "";
+      const match = hash.match(/^#\/runs\/([^/]+)(?:\/tasks\/(.+))?$/);
+      if (!match) return {};
+      return {
+        runId: decodeURIComponent(match[1]),
+        taskId: match[2] ? decodeURIComponent(match[2]) : null
+      };
+    }
+
+    function routeFor(runId, taskId = null) {
+      return taskId
+        ? `#/runs/${encodeURIComponent(runId)}/tasks/${encodeURIComponent(taskId)}`
+        : `#/runs/${encodeURIComponent(runId)}`;
+    }
+
+    function renderRoute() {
+      if (!state.runs.length) {
         content.innerHTML = `<div class="empty">No runs observed.</div>`;
         return;
       }
 
-      const snapshots = await Promise.all(runs.map((run) => fetchJson(`/runs/${run.run_id}/snapshot.json`).catch((error) => ({ error, run }))));
-      content.innerHTML = snapshots.map((snapshot) => snapshot.error ? renderRunError(snapshot) : renderRun(snapshot)).join("");
-      for (const row of document.querySelectorAll("[data-task-url]")) {
-        row.addEventListener("click", () => openTask(row.dataset.taskUrl));
+      const route = parseRoute();
+      if (!route.runId) {
+        renderRunIndex();
+        return;
       }
+
+      const snapshot = state.snapshots.get(route.runId);
+      if (!snapshot) {
+        content.innerHTML = `<div class="error">Run not found: ${escapeHtml(route.runId)}</div>`;
+        return;
+      }
+
+      renderTaskPage(snapshot, route.taskId);
     }
 
-    function renderRunError(item) {
-      return `<article class="run"><div class="error">Unable to load run ${escapeHtml(item.run.run_id)}: ${escapeHtml(item.error.message)}</div></article>`;
-    }
-
-    function renderRun(snapshot) {
-      const run = snapshot.run;
-      const counts = ["PENDING", "READY", "IN_PROGRESS", "EVALUATING", "BACKOFF", "COMPLETED", "UNKNOWN", "MISSING"].map((key) => {
-        const value = run.status_counts?.[key] || (key === "MISSING" ? run.missing_status_count : 0);
-        if (!value) return "";
-        return `<span class="count"><span>${key}</span><b>${value}</b></span>`;
+    function renderRunIndex() {
+      const cards = state.runs.map((run) => {
+        return `
+          <article class="run">
+            <header class="run-head">
+              <div>
+                <div class="run-title">
+                  <h2>${escapeHtml(run.display_name || run.source_ref || run.run_id)}</h2>
+                  <span class="pill">${escapeHtml(run.source_kind)}</span>
+                  <span class="pill">${escapeHtml(run.status)}</span>
+                </div>
+                <div class="meta">
+                  <span>${escapeHtml(run.source_ref || "No source reference")}</span>
+                  <span>activity ${escapeHtml(fmtTime(run.last_activity_at))}</span>
+                </div>
+              </div>
+              <a class="pill" href="${escapeHtml(routeFor(run.run_id))}">Open</a>
+            </header>
+          </article>
+        `;
       }).join("");
-      const tasks = (snapshot.tasks || []).map((task) => `
-        <article class="task-card status-${escapeHtml(task.status.normalized)}" data-task-url="/runs/${run.run_id}/tasks/${encodeURIComponent(task.task_id)}/snapshot.json">
+      content.innerHTML = cards;
+    }
+
+    function renderTaskPage(snapshot, taskId) {
+      const run = snapshot.run;
+      const current = taskId ? snapshot.byId.get(taskId) : null;
+      if (taskId && !current) {
+        content.innerHTML = `<div class="error">Task not found: ${escapeHtml(taskId)}</div>`;
+        return;
+      }
+
+      const children = snapshot.children.get(taskId || "__root__") || [];
+      const title = current
+        ? current.title || current.task_id
+        : run.display_name || run.source_ref || run.run_id;
+      const crumbs = renderBreadcrumbs(snapshot, current);
+      const summary = current ? renderTaskSummary(snapshot, current) : renderRunSummary(run);
+      const body = children.length
+        ? renderChildList(snapshot, children)
+        : renderLeafDetail(current);
+
+      content.innerHTML = `
+        <article class="run">
+          <section class="page-head">
+            ${crumbs}
+            <h2 class="page-title">${escapeHtml(title)}</h2>
+            ${summary}
+          </section>
+          <div class="run-body">${body}</div>
+        </article>
+      `;
+    }
+
+    function renderBreadcrumbs(snapshot, current) {
+      const links = [`<a href="#">Runs</a>`, `<a href="${escapeHtml(routeFor(snapshot.run.run_id))}">${escapeHtml(snapshot.run.display_name || snapshot.run.run_id)}</a>`];
+      if (current) {
+        for (const parent of ancestors(snapshot, current)) {
+          links.push(`<a href="${escapeHtml(routeFor(snapshot.run.run_id, parent.task_id))}">${escapeHtml(parent.task_id)}</a>`);
+        }
+        links.push(`<span>${escapeHtml(current.task_id)}</span>`);
+      }
+      return `<nav class="breadcrumbs">${links.join("<span>/</span>")}</nav>`;
+    }
+
+    function ancestors(snapshot, task) {
+      const result = [];
+      let parentId = task.raw_task?.parent_task_id;
+      const seen = new Set([task.task_id]);
+      while (parentId && snapshot.byId.has(parentId) && !seen.has(parentId)) {
+        const parent = snapshot.byId.get(parentId);
+        result.unshift(parent);
+        seen.add(parentId);
+        parentId = parent.raw_task?.parent_task_id;
+      }
+      return result;
+    }
+
+    function renderRunSummary(run) {
+      return `
+        <div class="meta">
+          <span>${escapeHtml(run.source_ref || "")}</span>
+          <span>activity ${escapeHtml(fmtTime(run.last_activity_at))}</span>
+        </div>
+      `;
+    }
+
+    function renderTaskSummary(snapshot, task) {
+      const children = snapshot.children.get(task.task_id) || [];
+      const rollup = summarizeSubtree(snapshot, task);
+      return `
+        <div class="meta">
+          <span class="mono">${escapeHtml(task.task_id)}</span>
+          <span class="status ${escapeHtml(task.status.normalized)}">${escapeHtml(task.status.normalized)}</span>
+          <span>${escapeHtml(children.length)} direct children</span>
+          <span>${escapeHtml(rollup.total - 1)} descendants</span>
+          <span>${escapeHtml(rollup.percent)}% complete</span>
+        </div>
+      `;
+    }
+
+    function summarizeSubtree(snapshot, task) {
+      if (snapshot.rollups?.has(task.task_id)) return snapshot.rollups.get(task.task_id);
+      return computeRollup(snapshot, task, new Set());
+    }
+
+    function computeRollup(snapshot, task, seen) {
+      if (snapshot.rollups?.has(task.task_id)) return snapshot.rollups.get(task.task_id);
+      if (seen.has(task.task_id)) return { counts: {}, total: 0, completed: 0, percent: 0 };
+
+      const nextSeen = new Set(seen);
+      nextSeen.add(task.task_id);
+      const counts = {};
+      let total = 1;
+      let completed = 0;
+      const status = task.status?.normalized || "MISSING";
+      counts[status] = 1;
+      if (status === "COMPLETED") completed = 1;
+
+      for (const child of snapshot.children.get(task.task_id) || []) {
+        const childRollup = computeRollup(snapshot, child, nextSeen);
+        total += childRollup.total;
+        completed += childRollup.completed;
+        for (const [childStatus, count] of Object.entries(childRollup.counts)) {
+          counts[childStatus] = (counts[childStatus] || 0) + count;
+        }
+      }
+
+      const rollup = { counts, total, completed, percent: total ? Math.round((completed / total) * 100) : 0 };
+      snapshot.rollups?.set(task.task_id, rollup);
+      return rollup;
+    }
+
+    function renderChildList(snapshot, children) {
+      const cards = children.map((task) => renderTaskCard(snapshot, task)).join("");
+      return `
+        <section class="main-track">
+          ${renderLocalGraph(snapshot, children)}
+          <p class="section-title">Tasks At This Level</p>
+          <div class="task-grid">${cards}</div>
+        </section>
+      `;
+    }
+
+    function renderTaskCard(snapshot, task) {
+      const childCount = (snapshot.children.get(task.task_id) || []).length;
+      const rollup = summarizeSubtree(snapshot, task);
+      return `
+        <a class="task-card status-${escapeHtml(task.status.normalized)}" href="${escapeHtml(routeFor(snapshot.run.run_id, task.task_id))}">
           <div class="task-top">
             <div class="task-id mono truncate">${escapeHtml(task.task_id)}</div>
             <span class="status ${escapeHtml(task.status.normalized)}">${escapeHtml(task.status.normalized)}</span>
@@ -571,106 +977,110 @@
           <div class="task-title">${escapeHtml(task.title || task.task_id)}</div>
           <div class="task-foot">
             <div class="task-facts">
-              <span class="pill">${escapeHtml(task.dependencies.length)} deps</span>
+              <span class="pill">${escapeHtml(childCount)} children</span>
+              <span class="pill">${escapeHtml(rollup.total - 1)} descendants</span>
+              <span class="pill">${escapeHtml(rollup.percent)}%</span>
               ${task.is_next_pending ? `<span class="pill">next</span>` : ""}
-              ${task.dependencies_complete ? `<span class="pill">deps ok</span>` : `<span class="pill">waiting</span>`}
             </div>
             <span class="mono truncate">${escapeHtml(fmtTime(task.updated_at))}</span>
           </div>
-        </article>
-      `).join("");
-      const signals = (snapshot.signals || []).map((signal) => `
-        <div class="signal"><b>${escapeHtml(signal.code)}</b><br>${escapeHtml(signal.message)}</div>
-      `).join("") || `<div class="signal">No signals.</div>`;
-      const events = (snapshot.recent_events || []).slice(0, 8).map((event) => `
-        <div class="event"><span class="mono">${escapeHtml(event.status)}</span> ${escapeHtml(event.task_id)}<br>${escapeHtml(fmtTime(event.updated_at))}</div>
-      `).join("") || `<div class="event">No recent events.</div>`;
-
-      return `
-        <article class="run">
-          <header class="run-head">
-            <div>
-              <div class="run-title">
-                <h2>${escapeHtml(run.display_name || run.source_ref || run.run_id)}</h2>
-                <span class="pill">${escapeHtml(run.source_kind)}</span>
-                <span class="pill">${escapeHtml(run.status)}</span>
-              </div>
-              <div class="meta">
-                <span class="mono">${escapeHtml(run.run_id)}</span>
-                <span>${escapeHtml(run.task_count)} tasks</span>
-                <span>activity ${escapeHtml(fmtTime(run.last_activity_at))}</span>
-              </div>
-            </div>
-            <div class="counts">${counts}</div>
-          </header>
-          <div class="run-body">
-            <div class="main-track">
-              ${renderGraph(run, snapshot.tasks || [])}
-              <div class="task-grid">${tasks}</div>
-            </div>
-            <div class="run-footer">
-              <aside class="side">
-                <p class="section-title">Recent</p>
-                <div class="events">${events}</div>
-              </aside>
-              <aside class="side">
-                <p class="section-title">Signals</p>
-                <div class="signals">${signals}</div>
-              </aside>
-            </div>
-          </div>
-        </article>
+        </a>
       `;
     }
 
-    function renderGraph(run, tasks) {
-      if (!tasks.length) return "";
-      const taskById = new Map(tasks.map((task) => [task.task_id, task]));
-      const depthMemo = new Map();
-
-      function depth(task, trail = new Set()) {
-        if (depthMemo.has(task.task_id)) return depthMemo.get(task.task_id);
-        if (trail.has(task.task_id)) return 0;
-        trail.add(task.task_id);
-        const parents = (task.dependencies || [])
-          .map((id) => taskById.get(id))
-          .filter(Boolean);
-        const value = parents.length
-          ? Math.max(...parents.map((parent) => depth(parent, new Set(trail)))) + 1
-          : 0;
-        depthMemo.set(task.task_id, value);
-        return value;
-      }
-
-      const columns = new Map();
-      for (const task of tasks) {
-        const level = depth(task);
-        if (!columns.has(level)) columns.set(level, []);
-        columns.get(level).push(task);
-      }
-
-      const columnsHtml = [...columns.keys()].sort((a, b) => a - b).map((level) => {
-        const nodes = columns.get(level)
-          .sort((a, b) => a.task_order - b.task_order)
-          .map((task) => {
-            const hasKnownDeps = (task.dependencies || []).some((id) => taskById.has(id));
-            return `
-              <button class="graph-node status-${escapeHtml(task.status.normalized)} ${hasKnownDeps ? "has-deps" : ""}" type="button" data-task-url="/runs/${run.run_id}/tasks/${encodeURIComponent(task.task_id)}/snapshot.json">
-                <span class="graph-id mono truncate">${escapeHtml(task.task_id)}</span>
-                <span class="graph-title">${escapeHtml(task.title || task.task_id)}</span>
-                <span class="graph-status">${escapeHtml(task.status.normalized)}</span>
-              </button>
-            `;
-          }).join("");
-        return `<div class="graph-column">${nodes}</div>`;
-      }).join("");
-
+    function renderLeafDetail(task) {
+      if (!task) return `<div class="empty">No task selected.</div>`;
+      const raw = task.raw_task || {};
+      const acceptance = (raw.acceptance_criteria || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+      const guidance = (raw.split_guidance || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
       return `
-        <section class="graph-panel">
-          <p class="section-title">Dependency Graph</p>
-          <div class="graph">${columnsHtml}</div>
+        <section class="detail-grid">
+          <div class="side">
+            <p class="section-title">Task Detail</p>
+            <div class="kv">
+              <div>Status</div><div class="mono">${escapeHtml(task.status.normalized)} ${task.status.raw ? `(${escapeHtml(task.status.raw)})` : ""}</div>
+              <div>Updated</div><div>${escapeHtml(fmtTime(task.updated_at))}</div>
+              <div>Dependencies</div><div class="mono">${escapeHtml(task.dependencies.join(", ") || "none")}</div>
+              <div>Dependencies complete</div><div>${task.dependencies_complete ? "yes" : "no"}</div>
+              <div>Next pending</div><div>${task.is_next_pending ? "yes" : "no"}</div>
+              <div>Source</div><div class="mono">${escapeHtml(raw.source_ref || "")}</div>
+              <div>Scope</div><div>${escapeHtml(raw.module_scope || "")}</div>
+              <div>Complexity</div><div>${escapeHtml(raw.complexity || "")}</div>
+              <div>Risk</div><div>${escapeHtml(raw.risk || "")}</div>
+            </div>
+            <p>${escapeHtml(raw.description || "")}</p>
+            ${acceptance ? `<p class="section-title">Acceptance Criteria</p><ul>${acceptance}</ul>` : ""}
+            ${guidance ? `<p class="section-title">Split Guidance</p><ul>${guidance}</ul>` : ""}
+          </div>
+          <div class="side">
+            <p class="section-title">Raw task JSON</p>
+            <pre>${escapeHtml(JSON.stringify(raw, null, 2))}</pre>
+          </div>
         </section>
       `;
+    }
+
+    function renderLocalGraph(snapshot, children) {
+      if (!children.length) return "";
+      const route = parseRoute();
+      const current = route.taskId ? snapshot.byId.get(route.taskId) : null;
+      const currentTitle = current
+        ? current.title || current.task_id
+        : snapshot.run.display_name || snapshot.run.source_ref || snapshot.run.run_id;
+      const currentId = current ? current.task_id : "Run root";
+      const dependencyCount = children.reduce((total, task) => total + (task.dependencies || []).length, 0);
+      const levelLabel = current ? "Direct children" : "Root tasks";
+      const levelTaskIds = new Set(children.map((task) => task.task_id));
+      return `
+        <section class="relationship-panel">
+          <div class="relationship-header">
+            <div>
+              <p class="section-title">Task Tree</p>
+              <div class="relationship-caption">${escapeHtml(levelLabel)} for the current page. Open any child to move one level deeper.</div>
+            </div>
+            <span class="pill">${escapeHtml(children.length)} nodes · ${escapeHtml(dependencyCount)} dependencies</span>
+          </div>
+          <div class="relationship-root">
+            <span class="task-id mono truncate">${escapeHtml(currentId)}</span>
+            <strong>${escapeHtml(currentTitle)}</strong>
+          </div>
+          <div class="relationship-tree">${children.map((task) => renderRelationshipRow(snapshot, levelTaskIds, task)).join("")}</div>
+          ${dependencyCount ? `<div class="relationship-note">Dependencies outside this level are marked as external so this view stays scoped to the current recursive page.</div>` : ""}
+        </section>
+      `;
+    }
+
+    function renderRelationshipRow(snapshot, levelTaskIds, task) {
+      const childCount = (snapshot.children.get(task.task_id) || []).length;
+      const deps = task.dependencies || [];
+      const dependencyHtml = deps.length
+        ? deps.map((id) => renderDependencyChip(snapshot, id, levelTaskIds)).join("")
+        : `<span class="dependency-chip">none</span>`;
+      return `
+        <div class="relationship-row">
+          <a class="relationship-main" href="${escapeHtml(routeFor(snapshot.run.run_id, task.task_id))}">
+            <span class="task-id mono truncate">${escapeHtml(task.task_id)}</span>
+            <span class="relationship-title">${escapeHtml(task.title || task.task_id)}</span>
+          </a>
+          <div class="dependency-cell">
+            <span class="dependency-label">Depends on</span>
+            ${dependencyHtml}
+          </div>
+          <div class="relationship-status">
+            <span class="status-dot ${escapeHtml(task.status.normalized)}"></span>
+            <span class="mono">${escapeHtml(task.status.normalized)}</span>
+            <span>${escapeHtml(childCount)} children</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderDependencyChip(snapshot, dependencyId, levelTaskIds) {
+      const known = snapshot.byId.has(dependencyId);
+      const sameLevel = levelTaskIds.has(dependencyId);
+      const label = sameLevel ? dependencyId : `${dependencyId} external`;
+      if (!known) return `<span class="dependency-chip">${escapeHtml(label)}</span>`;
+      return `<a class="dependency-chip known" href="${escapeHtml(routeFor(snapshot.run.run_id, dependencyId))}">${escapeHtml(label)}</a>`;
     }
 
     async function openTask(url) {
