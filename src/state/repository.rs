@@ -636,13 +636,18 @@ impl<'a> TaskRepository<'a> {
     ) -> sqlx::Result<Option<Value>> {
         let tasks = self.list_graph_tasks_for_graph(graph_id).await?;
         let excluded: HashSet<&str> = exclude_task_ids.iter().map(String::as_str).collect();
-        let completed_ids: HashSet<String> = tasks
+
+        // Build a map of completed tasks by id, preserving list index
+        // (which correlates with task_order since list_graph_tasks_for_graph
+        // sorts by task_order ASC) so we can pick the latest dependency.
+        let completed_map: HashMap<String, (usize, Value)> = tasks
             .iter()
-            .filter(|task| graph_task_status(task).as_deref() == Some("complete"))
-            .filter_map(graph_task_id)
+            .enumerate()
+            .filter(|(_, task)| graph_task_status(task).as_deref() == Some("complete"))
+            .filter_map(|(index, task)| graph_task_id(task).map(|id| (id, (index, task.clone()))))
             .collect();
 
-        let mut candidates: Vec<(usize, i64, Value)> = tasks
+        let mut candidates: Vec<(usize, i64, String, Value)> = tasks
             .into_iter()
             .enumerate()
             .filter_map(|(index, task)| {
@@ -654,18 +659,53 @@ impl<'a> TaskRepository<'a> {
                     return None;
                 }
                 let dependencies = graph_task_dependencies(&task);
-                if !dependencies.iter().all(|dep| completed_ids.contains(dep)) {
+                if !dependencies.iter().all(|dep| completed_map.contains_key(dep)) {
                     return None;
                 }
-                Some((index, graph_task_priority(&task), task))
+                Some((index, graph_task_priority(&task), task_id, task))
             })
             .collect();
 
-        candidates.sort_by(|(index_a, priority_a, _), (index_b, priority_b, _)| {
+        candidates.sort_by(|(index_a, priority_a, _, _), (index_b, priority_b, _, _)| {
             priority_b.cmp(priority_a).then(index_a.cmp(index_b))
         });
 
-        Ok(candidates.into_iter().next().map(|(_, _, task)| task))
+        let Some((_, _, task_id, mut task)) = candidates.into_iter().next() else {
+            return Ok(None);
+        };
+
+        // Propagate base_sha from the latest completed dependency that targets
+        // the same repository.
+        if let Some(repo_path) = graph_task_repo_path(&task) {
+            let dependencies = graph_task_dependencies(&task);
+            let propagated = dependencies
+                .iter()
+                .filter_map(|dep_id| completed_map.get(dep_id))
+                .filter(|(_, dep_task)| graph_task_repo_path(dep_task).as_ref() == Some(&repo_path))
+                .max_by_key(|(idx, _)| *idx)
+                .and_then(|(_, dep_task)| graph_task_accepted_commit(dep_task));
+            if let Some(base_sha) = propagated {
+                if let Some(obj) = task.as_object_mut() {
+                    obj.insert("base_sha".to_string(), Value::String(base_sha));
+                }
+            }
+        }
+
+        // Recompute state hash because task_data may have changed.
+        let task_order: (i32,) = sqlx::query_as(
+            "SELECT task_order FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
+        )
+        .bind(graph_id)
+        .bind(&task_id)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(Some(crate::state::hash::enrich_task_with_hash(
+            graph_id,
+            &task_id,
+            task_order.0,
+            task,
+        )))
     }
 
     pub async fn recover_in_progress_graph_tasks(
@@ -1504,6 +1544,26 @@ fn graph_task_dependencies(task: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn graph_task_repo_path(task: &Value) -> Option<String> {
+    task.get("repo_path")?
+        .as_str()
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+}
+
+fn graph_task_accepted_commit(task: &Value) -> Option<String> {
+    task.get("accepted_commit")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            task.get("workspace_commit")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .filter(|s| !s.is_empty())
+        })
 }
 
 pub struct DependencyResolver {
@@ -2821,6 +2881,153 @@ mod tests {
         assert_eq!(complete_task["sandbox_id"], "s2");
         assert!(in_progress_task.get("sandbox_id").is_none());
         assert_eq!(graph_task_status(&in_progress_task).as_deref(), Some("pending"));
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    // -----------------------------------------------------------------------
+    // Base-SHA propagation across dependent same-repo tasks
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_next_pending_propagates_base_sha_from_same_repo_dependency() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "propagate-same-repo";
+
+        let mut dep = graph_task("dep", Some("complete"), 10, &[]);
+        dep["repo_path"] = "/repo/a".into();
+        dep["accepted_commit"] = "abc123".into();
+
+        let mut pending = graph_task("pending", Some("pending"), 10, &["dep"]);
+        pending["repo_path"] = "/repo/a".into();
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[dep, pending])
+            .await
+            .unwrap();
+
+        let next = repo.next_pending_graph_task_for_graph(graph_id, &[])
+            .await
+            .unwrap();
+        assert!(next.is_some());
+        let next = next.unwrap();
+        assert_eq!(graph_task_id(&next).as_deref(), Some("pending"));
+        assert_eq!(next["base_sha"].as_str(), Some("abc123"));
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_next_pending_does_not_propagate_base_sha_from_cross_repo_dependency() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "no-propagate-cross-repo";
+
+        let mut dep = graph_task("dep", Some("complete"), 10, &[]);
+        dep["repo_path"] = "/repo/a".into();
+        dep["accepted_commit"] = "abc123".into();
+
+        let mut pending = graph_task("pending", Some("pending"), 10, &["dep"]);
+        pending["repo_path"] = "/repo/b".into();
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[dep, pending])
+            .await
+            .unwrap();
+
+        let next = repo.next_pending_graph_task_for_graph(graph_id, &[])
+            .await
+            .unwrap();
+        assert!(next.is_some());
+        let next = next.unwrap();
+        assert_eq!(graph_task_id(&next).as_deref(), Some("pending"));
+        assert!(next.get("base_sha").is_none());
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_next_pending_propagates_from_latest_same_repo_dependency() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "propagate-latest";
+
+        let mut dep1 = graph_task("dep1", Some("complete"), 10, &[]);
+        dep1["repo_path"] = "/repo/a".into();
+        dep1["accepted_commit"] = "old123".into();
+
+        let mut dep2 = graph_task("dep2", Some("complete"), 10, &[]);
+        dep2["repo_path"] = "/repo/a".into();
+        dep2["accepted_commit"] = "new456".into();
+
+        let mut pending = graph_task("pending", Some("pending"), 10, &["dep1", "dep2"]);
+        pending["repo_path"] = "/repo/a".into();
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[dep1, dep2, pending])
+            .await
+            .unwrap();
+
+        let next = repo.next_pending_graph_task_for_graph(graph_id, &[])
+            .await
+            .unwrap();
+        assert!(next.is_some());
+        let next = next.unwrap();
+        assert_eq!(graph_task_id(&next).as_deref(), Some("pending"));
+        assert_eq!(next["base_sha"].as_str(), Some("new456"));
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_next_pending_falls_back_to_workspace_commit() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "fallback-ws-commit";
+
+        let mut dep = graph_task("dep", Some("complete"), 10, &[]);
+        dep["repo_path"] = "/repo/a".into();
+        dep["workspace_commit"] = "ws789".into();
+
+        let mut pending = graph_task("pending", Some("pending"), 10, &["dep"]);
+        pending["repo_path"] = "/repo/a".into();
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[dep, pending])
+            .await
+            .unwrap();
+
+        let next = repo.next_pending_graph_task_for_graph(graph_id, &[])
+            .await
+            .unwrap();
+        assert!(next.is_some());
+        let next = next.unwrap();
+        assert_eq!(next["base_sha"].as_str(), Some("ws789"));
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_next_pending_accepted_commit_takes_precedence_over_workspace_commit() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "precedence-accepted";
+
+        let mut dep = graph_task("dep", Some("complete"), 10, &[]);
+        dep["repo_path"] = "/repo/a".into();
+        dep["accepted_commit"] = "acc111".into();
+        dep["workspace_commit"] = "ws222".into();
+
+        let mut pending = graph_task("pending", Some("pending"), 10, &["dep"]);
+        pending["repo_path"] = "/repo/a".into();
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[dep, pending])
+            .await
+            .unwrap();
+
+        let next = repo.next_pending_graph_task_for_graph(graph_id, &[])
+            .await
+            .unwrap();
+        assert!(next.is_some());
+        let next = next.unwrap();
+        assert_eq!(next["base_sha"].as_str(), Some("acc111"));
 
         cleanup_graph_tasks(&pool, graph_id).await;
     }

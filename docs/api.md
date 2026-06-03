@@ -144,6 +144,8 @@ Scoped `next_pending` 有可运行任务时返回：
 }
 ```
 
+当返回的 pending task 存在已完成的同仓库（`repo_path` 相同）依赖时，LimeNet 会自动将最新完成依赖的 `accepted_commit`（或回退到 `workspace_commit`）作为 `base_sha` 注入到返回的 task 数据中，以便下游执行环境可以直接基于前序任务的已接受结果继续工作，而不是回退到原始的共享 base commit。
+
 ### Graph-scoped endpoints
 
 以下 endpoint 要求显式 `graph_id`，所有读写都限制在指定 graph 内：
@@ -186,6 +188,8 @@ Graph-scoped `next_pending` 有可运行任务时返回：
   "task": null
 }
 ```
+
+当返回的 pending task 存在已完成的同仓库（`repo_path` 相同）依赖时，LimeNet 会自动将最新完成依赖的 `accepted_commit`（或回退到 `workspace_commit`）作为 `base_sha` 注入到返回的 task 数据中。
 
 ### 任务恢复 (`recover`)
 
