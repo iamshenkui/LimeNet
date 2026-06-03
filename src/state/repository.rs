@@ -190,7 +190,8 @@ pub fn graph_task_hash(run_id: Uuid, task_id: &str, task_data: &Value) -> String
         "task_id": task_id,
         "task": task_data,
     });
-    let encoded = serde_json::to_vec(&canonical).unwrap_or_default();
+    let encoded = serde_json::to_vec(&canonical)
+        .expect("canonical graph task hash payload must be JSON-serializable");
     let digest = Sha256::digest(encoded);
     format!("{digest:x}")
 }
@@ -562,7 +563,7 @@ impl<'a> TaskRepository<'a> {
     ) -> Result<TaskView, TaskViewError> {
         let mut tx = self.pool.begin().await?;
         let rows: Vec<(String, Value)> = sqlx::query_as(
-            "SELECT task_id, task_data FROM graph_tasks WHERE run_id = $1 ORDER BY task_order ASC",
+            "SELECT task_id, task_data FROM graph_tasks WHERE run_id = $1 ORDER BY task_order ASC FOR UPDATE",
         )
         .bind(run_id)
         .fetch_all(&mut *tx)
@@ -610,7 +611,7 @@ impl<'a> TaskRepository<'a> {
     ) -> Result<TaskView, TaskViewError> {
         let mut tx = self.pool.begin().await?;
         let rows: Vec<(String, Value)> = sqlx::query_as(
-            "SELECT task_id, task_data FROM graph_tasks WHERE run_id = $1 ORDER BY task_order ASC",
+            "SELECT task_id, task_data FROM graph_tasks WHERE run_id = $1 ORDER BY task_order ASC FOR UPDATE",
         )
         .bind(run_id)
         .fetch_all(&mut *tx)
