@@ -424,16 +424,16 @@ impl<'a> TaskRepository<'a> {
     }
 
     pub async fn list_graph_tasks_for_graph(&self, graph_id: &str) -> sqlx::Result<Vec<Value>> {
-        let rows: Vec<(String, i32, Value)> = sqlx::query_as(
-            "SELECT task_id, task_order, task_data FROM graph_tasks WHERE graph_id = $1 ORDER BY task_order ASC"
+        let rows: Vec<(String, i32, Value, Option<String>)> = sqlx::query_as(
+            "SELECT task_id, task_order, task_data, state_hash FROM graph_tasks WHERE graph_id = $1 ORDER BY task_order ASC"
         )
         .bind(graph_id)
         .fetch_all(self.pool)
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(task_id, task_order, task_data)| {
-                crate::state::hash::enrich_task_with_hash(graph_id, &task_id, task_order, task_data)
+            .map(|(task_id, task_order, task_data, state_hash)| {
+                enrich_task_with_stored_hash(graph_id, &task_id, task_order, task_data, state_hash)
             })
             .collect())
     }
@@ -447,15 +447,15 @@ impl<'a> TaskRepository<'a> {
         graph_id: &str,
         task_id: &str,
     ) -> sqlx::Result<Option<Value>> {
-        let row: Option<(String, i32, Value)> = sqlx::query_as(
-            "SELECT task_id, task_order, task_data FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
+        let row: Option<(String, i32, Value, Option<String>)> = sqlx::query_as(
+            "SELECT task_id, task_order, task_data, state_hash FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
         )
         .bind(graph_id)
         .bind(task_id)
         .fetch_optional(self.pool)
         .await?;
-        Ok(row.map(|(task_id, task_order, task_data)| {
-            crate::state::hash::enrich_task_with_hash(graph_id, &task_id, task_order, task_data)
+        Ok(row.map(|(task_id, task_order, task_data, state_hash)| {
+            enrich_task_with_stored_hash(graph_id, &task_id, task_order, task_data, state_hash)
         }))
     }
 
@@ -478,16 +478,20 @@ impl<'a> TaskRepository<'a> {
             let task_id = graph_task_id(task).ok_or_else(|| {
                 sqlx::Error::Protocol("graph task payload missing non-empty task_id".into())
             })?;
+            let task_order = index as i32;
+            let clean_task = strip_hash_fields(task.clone());
+            let state_hash = compute_stored_state_hash(graph_id, &task_id, task_order, &clean_task);
             sqlx::query(
                 r#"
-                INSERT INTO graph_tasks (graph_id, task_id, task_order, task_data)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO graph_tasks (graph_id, task_id, task_order, task_data, state_hash)
+                VALUES ($1, $2, $3, $4, $5)
                 "#,
             )
             .bind(graph_id)
             .bind(&task_id)
-            .bind(index as i32)
-            .bind(task)
+            .bind(task_order)
+            .bind(&clean_task)
+            .bind(&state_hash)
             .execute(&mut *tx)
             .await?;
         }
@@ -527,18 +531,22 @@ impl<'a> TaskRepository<'a> {
             }
         };
 
+        let clean_task = strip_hash_fields(task.clone());
+        let state_hash = compute_stored_state_hash(graph_id, task_id, task_order, &clean_task);
+
         sqlx::query(
             r#"
-            INSERT INTO graph_tasks (graph_id, task_id, task_order, task_data)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO graph_tasks (graph_id, task_id, task_order, task_data, state_hash)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (graph_id, task_id)
-            DO UPDATE SET task_data = EXCLUDED.task_data
+            DO UPDATE SET task_data = EXCLUDED.task_data, state_hash = EXCLUDED.state_hash
             "#,
         )
         .bind(graph_id)
         .bind(task_id)
         .bind(task_order)
-        .bind(task)
+        .bind(&clean_task)
+        .bind(&state_hash)
         .execute(self.pool)
         .await?;
         Ok(())
@@ -603,16 +611,20 @@ impl<'a> TaskRepository<'a> {
 
         for (index, task) in tasks.iter().enumerate() {
             let task_id = graph_task_id(task).ok_or(GraphTaskInsertError::InvalidTaskPayload)?;
+            let task_order = anchor_order + 1 + index as i32;
+            let clean_task = strip_hash_fields(task.clone());
+            let state_hash = compute_stored_state_hash(graph_id, &task_id, task_order, &clean_task);
             sqlx::query(
                 r#"
-                INSERT INTO graph_tasks (graph_id, task_id, task_order, task_data)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO graph_tasks (graph_id, task_id, task_order, task_data, state_hash)
+                VALUES ($1, $2, $3, $4, $5)
                 "#,
             )
             .bind(graph_id)
             .bind(&task_id)
-            .bind(anchor_order + 1 + index as i32)
-            .bind(task)
+            .bind(task_order)
+            .bind(&clean_task)
+            .bind(&state_hash)
             .execute(&mut *tx)
             .await?;
         }
@@ -719,10 +731,21 @@ impl<'a> TaskRepository<'a> {
             let task_id = graph_task_id(&task).ok_or_else(|| {
                 sqlx::Error::Protocol("graph task payload missing non-empty task_id".into())
             })?;
-            sqlx::query(
-                "UPDATE graph_tasks SET task_data = $1 WHERE graph_id = $2 AND task_id = $3"
+            let task_order_row: Option<(i32,)> = sqlx::query_as(
+                "SELECT task_order FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
             )
-            .bind(&task)
+            .bind(graph_id)
+            .bind(&task_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            let task_order = task_order_row.map(|r| r.0).unwrap_or(0);
+            let clean_task = strip_hash_fields(task);
+            let state_hash = compute_stored_state_hash(graph_id, &task_id, task_order, &clean_task);
+            sqlx::query(
+                "UPDATE graph_tasks SET task_data = $1, state_hash = $2 WHERE graph_id = $3 AND task_id = $4"
+            )
+            .bind(&clean_task)
+            .bind(&state_hash)
             .bind(graph_id)
             .bind(task_id)
             .execute(&mut *tx)
@@ -760,6 +783,37 @@ impl<'a> TaskRepository<'a> {
             .await
     }
 
+    /// Look up a graph task directly by its persisted state hash.
+    ///
+    /// This uses the `idx_graph_tasks_graph_hash` index and is O(1) in graph
+    /// size, avoiding the full-table scan that a client-side hash match would
+    /// require.
+    pub async fn get_graph_task_by_hash_for_graph(
+        &self,
+        graph_id: &str,
+        state_hash: &str,
+    ) -> sqlx::Result<Option<Value>> {
+        let row: Option<(String, i32, Value, Option<String>)> = sqlx::query_as(
+            "SELECT task_id, task_order, task_data, state_hash FROM graph_tasks WHERE graph_id = $1 AND state_hash = $2"
+        )
+        .bind(graph_id)
+        .bind(state_hash)
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row.map(|(task_id, task_order, task_data, state_hash)| {
+            enrich_task_with_stored_hash(graph_id, &task_id, task_order, task_data, state_hash)
+        }))
+    }
+
+    pub async fn get_graph_task_by_hash_for_run(
+        &self,
+        run_id: Uuid,
+        state_hash: &str,
+    ) -> sqlx::Result<Option<Value>> {
+        self.get_graph_task_by_hash_for_graph(&Self::run_id_to_graph_id(run_id), state_hash)
+            .await
+    }
+
     pub async fn replace_graph_tasks_for_run(
         &self,
         run_id: Uuid,
@@ -777,17 +831,21 @@ impl<'a> TaskRepository<'a> {
             let task_id = graph_task_id(task).ok_or_else(|| {
                 sqlx::Error::Protocol("graph task payload missing non-empty task_id".into())
             })?;
+            let task_order = index as i32;
+            let clean_task = strip_hash_fields(task.clone());
+            let state_hash = compute_stored_state_hash(&graph_id, &task_id, task_order, &clean_task);
             sqlx::query(
                 r#"
-                INSERT INTO graph_tasks (run_id, graph_id, task_id, task_order, task_data)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO graph_tasks (run_id, graph_id, task_id, task_order, task_data, state_hash)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 "#,
             )
             .bind(run_id)
             .bind(&graph_id)
             .bind(&task_id)
-            .bind(index as i32)
-            .bind(task)
+            .bind(task_order)
+            .bind(&clean_task)
+            .bind(&state_hash)
             .execute(&mut *tx)
             .await?;
         }
@@ -825,19 +883,23 @@ impl<'a> TaskRepository<'a> {
             }
         };
 
+        let clean_task = strip_hash_fields(task.clone());
+        let state_hash = compute_stored_state_hash(&graph_id, task_id, task_order, &clean_task);
+
         sqlx::query(
             r#"
-            INSERT INTO graph_tasks (run_id, graph_id, task_id, task_order, task_data)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO graph_tasks (run_id, graph_id, task_id, task_order, task_data, state_hash)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (graph_id, task_id)
-            DO UPDATE SET task_data = EXCLUDED.task_data
+            DO UPDATE SET task_data = EXCLUDED.task_data, state_hash = EXCLUDED.state_hash
             "#,
         )
         .bind(run_id)
         .bind(&graph_id)
         .bind(task_id)
         .bind(task_order)
-        .bind(task)
+        .bind(&clean_task)
+        .bind(&state_hash)
         .execute(self.pool)
         .await?;
         Ok(())
@@ -895,17 +957,21 @@ impl<'a> TaskRepository<'a> {
 
         for (index, task) in tasks.iter().enumerate() {
             let task_id = graph_task_id(task).ok_or(GraphTaskInsertError::InvalidTaskPayload)?;
+            let task_order = anchor_order + 1 + index as i32;
+            let clean_task = strip_hash_fields(task.clone());
+            let state_hash = compute_stored_state_hash(&graph_id, &task_id, task_order, &clean_task);
             sqlx::query(
                 r#"
-                INSERT INTO graph_tasks (run_id, graph_id, task_id, task_order, task_data)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO graph_tasks (run_id, graph_id, task_id, task_order, task_data, state_hash)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 "#,
             )
             .bind(run_id)
             .bind(&graph_id)
             .bind(&task_id)
-            .bind(anchor_order + 1 + index as i32)
-            .bind(task)
+            .bind(task_order)
+            .bind(&clean_task)
+            .bind(&state_hash)
             .execute(&mut *tx)
             .await?;
         }
@@ -1487,6 +1553,43 @@ fn graph_task_dependencies(task: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Strip server-injected hash fields from task_data before storage so the
+/// stored JSON is clean and the canonical hash is computed from the same
+/// payload that would be sent by a client.
+fn strip_hash_fields(mut task_data: Value) -> Value {
+    if let Some(obj) = task_data.as_object_mut() {
+        obj.remove("hash_algorithm");
+        obj.remove("state_hash");
+    }
+    task_data
+}
+
+/// Compute the state hash for a graph task, returning just the hex digest.
+fn compute_stored_state_hash(graph_id: &str, task_id: &str, task_order: i32, task_data: &Value) -> String {
+    crate::state::hash::compute_graph_task_state_hash(graph_id, task_id, task_order, task_data).1
+}
+
+/// Enrich task_data with the stored (or computed) hash fields.
+/// If `state_hash` is present it is injected directly; otherwise the hash is
+/// recomputed from the payload for backward compatibility with rows created
+/// before the hash column existed.
+fn enrich_task_with_stored_hash(
+    graph_id: &str,
+    task_id: &str,
+    task_order: i32,
+    mut task_data: Value,
+    state_hash: Option<String>,
+) -> Value {
+    if let Some(obj) = task_data.as_object_mut() {
+        let hash = state_hash.unwrap_or_else(|| {
+            compute_stored_state_hash(graph_id, task_id, task_order, &Value::Object(obj.clone()))
+        });
+        obj.insert("hash_algorithm".to_string(), Value::String("sha256".to_string()));
+        obj.insert("state_hash".to_string(), Value::String(hash));
+    }
+    task_data
 }
 
 pub struct DependencyResolver {
@@ -2696,6 +2799,313 @@ mod tests {
         assert_eq!(
             first_hash, second_hash,
             "hash must be stable even when client round-trips the enriched response"
+        );
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    // -----------------------------------------------------------------------
+    // Graph task hash persistence and indexed lookup tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_graph_task_hash_persisted_in_db_column() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "hash-persisted-graph";
+
+        let payload = serde_json::json!({
+            "task_id": "t1",
+            "status": "pending",
+            "priority": 10,
+        });
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[payload.clone()])
+            .await
+            .unwrap();
+
+        // Verify the hash is stored in the DB column, not just computed on read
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT state_hash FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
+        )
+        .bind(graph_id)
+        .bind("t1")
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+
+        let stored_hash = row.expect("row should exist").0;
+        assert!(
+            stored_hash.len() == 64,
+            "state_hash column must contain a 64-char hex sha256"
+        );
+
+        // The returned task hash must match the stored hash
+        let task = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        assert_eq!(task["state_hash"], stored_hash);
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_graph_task_lookup_by_hash_returns_task() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "hash-lookup-graph";
+
+        let payload = serde_json::json!({
+            "task_id": "t1",
+            "status": "pending",
+            "priority": 10,
+        });
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[payload.clone()])
+            .await
+            .unwrap();
+
+        let task = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let state_hash = task["state_hash"].as_str().unwrap().to_string();
+
+        // Lookup by hash must return the same task
+        let by_hash = repo
+            .get_graph_task_by_hash_for_graph(graph_id, &state_hash)
+            .await
+            .unwrap();
+        assert!(by_hash.is_some(), "lookup by hash must find the task");
+        let by_hash = by_hash.unwrap();
+        assert_eq!(by_hash["task_id"], "t1");
+        assert_eq!(by_hash["state_hash"], state_hash);
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_graph_task_lookup_by_hash_returns_none_for_unknown() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "hash-unknown-graph";
+
+        repo.replace_graph_tasks_for_graph(
+            graph_id,
+            &[graph_task("t1", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+
+        let by_hash = repo
+            .get_graph_task_by_hash_for_graph(graph_id, "0000000000000000000000000000000000000000000000000000000000000000")
+            .await
+            .unwrap();
+        assert!(by_hash.is_none(), "lookup by unknown hash must return None");
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_graph_task_lookup_by_hash_is_graph_scoped() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_a = "hash-scope-a";
+        let graph_b = "hash-scope-b";
+
+        let payload = serde_json::json!({
+            "task_id": "t1",
+            "status": "pending",
+            "priority": 10,
+        });
+
+        repo.replace_graph_tasks_for_graph(graph_a, &[payload.clone()])
+            .await
+            .unwrap();
+        repo.replace_graph_tasks_for_graph(graph_b, &[payload.clone()])
+            .await
+            .unwrap();
+
+        let hash_a = repo
+            .get_graph_task_for_graph(graph_a, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist")["state_hash"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // The same logical payload in a different graph has a different hash
+        // because graph_id is part of the canonical input.  Therefore lookup
+        // by hash_a in graph_b should return None.
+        let by_hash_b = repo
+            .get_graph_task_by_hash_for_graph(graph_b, &hash_a)
+            .await
+            .unwrap();
+        assert!(
+            by_hash_b.is_none(),
+            "lookup by hash from graph_a in graph_b must return None"
+        );
+
+        // Lookup in graph_a must succeed
+        let by_hash_a = repo
+            .get_graph_task_by_hash_for_graph(graph_a, &hash_a)
+            .await
+            .unwrap();
+        assert!(by_hash_a.is_some(), "lookup by hash in graph_a must succeed");
+
+        cleanup_graph_tasks(&pool, graph_a).await;
+        cleanup_graph_tasks(&pool, graph_b).await;
+    }
+
+    #[tokio::test]
+    async fn test_graph_task_hash_updated_after_upsert_changes_payload() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "hash-update-graph";
+
+        repo.replace_graph_tasks_for_graph(
+            graph_id,
+            &[graph_task("t1", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+
+        let first = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let first_hash = first["state_hash"].as_str().unwrap().to_string();
+
+        // Upsert with a changed payload
+        repo.upsert_graph_task_for_graph(
+            graph_id,
+            "t1",
+            &graph_task("t1", Some("complete"), 10, &[]),
+        )
+        .await
+        .unwrap();
+
+        let second = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let second_hash = second["state_hash"].as_str().unwrap().to_string();
+
+        assert_ne!(
+            first_hash, second_hash,
+            "stored hash must change when logical payload changes"
+        );
+
+        // The old hash should no longer find the task
+        let by_old_hash = repo
+            .get_graph_task_by_hash_for_graph(graph_id, &first_hash)
+            .await
+            .unwrap();
+        assert!(
+            by_old_hash.is_none(),
+            "lookup by stale hash must return None after upsert"
+        );
+
+        // The new hash should find the task
+        let by_new_hash = repo
+            .get_graph_task_by_hash_for_graph(graph_id, &second_hash)
+            .await
+            .unwrap();
+        assert!(
+            by_new_hash.is_some(),
+            "lookup by current hash must succeed after upsert"
+        );
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_run_scoped_lookup_by_hash() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let run_id = Uuid::new_v4();
+
+        repo.ensure_run(run_id).await.unwrap();
+        repo.replace_graph_tasks_for_run(
+            run_id,
+            &[graph_task("t1", Some("pending"), 10, &[])],
+        )
+        .await
+        .unwrap();
+
+        let task = repo
+            .get_graph_task_for_run(run_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let state_hash = task["state_hash"].as_str().unwrap().to_string();
+
+        let by_hash = repo
+            .get_graph_task_by_hash_for_run(run_id, &state_hash)
+            .await
+            .unwrap();
+        assert!(by_hash.is_some(), "run-scoped lookup by hash must succeed");
+        assert_eq!(by_hash.unwrap()["task_id"], "t1");
+
+        cleanup_run(&pool, run_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_hash_fields_stripped_from_stored_task_data() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "hash-clean-storage-graph";
+
+        // Upsert an enriched payload that already contains hash fields
+        let enriched = serde_json::json!({
+            "task_id": "t1",
+            "status": "pending",
+            "hash_algorithm": "sha256",
+            "state_hash": "deadbeef",
+        });
+
+        repo.upsert_graph_task_for_graph(graph_id, "t1", &enriched)
+            .await
+            .unwrap();
+
+        // The stored task_data must not contain the injected hash fields
+        let row: Option<(Value,)> = sqlx::query_as(
+            "SELECT task_data FROM graph_tasks WHERE graph_id = $1 AND task_id = $2"
+        )
+        .bind(graph_id)
+        .bind("t1")
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+
+        let stored_data = row.expect("row should exist").0;
+        assert!(
+            stored_data.get("hash_algorithm").is_none(),
+            "stored task_data must not contain hash_algorithm"
+        );
+        assert!(
+            stored_data.get("state_hash").is_none(),
+            "stored task_data must not contain state_hash"
+        );
+
+        // But the read path must still inject the correct canonical hash
+        let task = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        assert_eq!(task["hash_algorithm"], "sha256");
+        assert!(task["state_hash"].as_str().unwrap().len() == 64);
+        assert_ne!(
+            task["state_hash"].as_str().unwrap(),
+            "deadbeef",
+            "read must return the canonical hash, not the stale client-supplied value"
         );
 
         cleanup_graph_tasks(&pool, graph_id).await;

@@ -268,6 +268,42 @@ async fn get_graph_task(
     }
 }
 
+async fn get_graph_task_by_hash(
+    State(state): State<Arc<AppState>>,
+    Path((graph_id, state_hash)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.get_graph_task_by_hash_for_graph(&graph_id, &state_hash).await {
+        Ok(Some(task)) => (StatusCode::OK, Json(task)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_graph_task_by_hash_for_run(
+    State(state): State<Arc<AppState>>,
+    Path((run_id, state_hash)): Path<(uuid::Uuid, String)>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    if let Err(response) = ensure_scoped_run(&repo, run_id).await {
+        return response;
+    }
+
+    match repo.get_graph_task_by_hash_for_run(run_id, &state_hash).await {
+        Ok(Some(task)) => (StatusCode::OK, Json(task)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 async fn upsert_graph_task_for_run(
     State(state): State<Arc<AppState>>,
     Path((run_id, task_id)): Path<(uuid::Uuid, String)>,
@@ -894,6 +930,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(get_graph_task_for_run).put(upsert_graph_task_for_run),
         )
         .route(
+            "/api/v1/runs/{run_id}/graph/tasks/by_hash/{state_hash}",
+            get(get_graph_task_by_hash_for_run),
+        )
+        .route(
             "/api/v1/graphs/{graph_id}/tasks",
             get(list_graph_tasks)
                 .post(replace_graph_tasks)
@@ -911,6 +951,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/v1/graphs/{graph_id}/tasks/{task_id}",
             get(get_graph_task).put(upsert_graph_task).delete(delete_graph_task),
+        )
+        .route(
+            "/api/v1/graphs/{graph_id}/tasks/by_hash/{state_hash}",
+            get(get_graph_task_by_hash),
         )
         .route("/api/v1/tasks/batch", post(create_tasks_batch))
         .route("/api/v1/tasks/claim", post(claim_task))
