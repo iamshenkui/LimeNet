@@ -668,8 +668,11 @@ impl<'a> TaskRepository<'a> {
         Ok(candidates.into_iter().next().map(|(_, _, task)| task))
     }
 
-    pub async fn recover_in_progress_graph_tasks(&self) -> sqlx::Result<i64> {
-        self.recover_in_progress_graph_tasks_for_run(DEFAULT_RUN_ID)
+    pub async fn recover_in_progress_graph_tasks(
+        &self,
+        clear_fields: Option<&[String]>,
+    ) -> sqlx::Result<i64> {
+        self.recover_in_progress_graph_tasks_for_run(DEFAULT_RUN_ID, clear_fields)
             .await
     }
 
@@ -704,6 +707,7 @@ impl<'a> TaskRepository<'a> {
     pub async fn recover_in_progress_graph_tasks_for_graph(
         &self,
         graph_id: &str,
+        clear_fields: Option<&[String]>,
     ) -> sqlx::Result<i64> {
         let tasks = self.list_graph_tasks_for_graph(graph_id).await?;
         let mut recovered = 0_i64;
@@ -715,6 +719,15 @@ impl<'a> TaskRepository<'a> {
             }
             if let Some(status) = task.get_mut("status") {
                 *status = Value::String("pending".to_string());
+            }
+            // Strip caller-supplied volatile execution fields so that a
+            // reclaimed task does not carry stale sandbox/workspace state.
+            if let Some(fields) = clear_fields {
+                if let Some(obj) = task.as_object_mut() {
+                    for field in fields {
+                        obj.remove(field);
+                    }
+                }
             }
             let task_id = graph_task_id(&task).ok_or_else(|| {
                 sqlx::Error::Protocol("graph task payload missing non-empty task_id".into())
@@ -926,9 +939,13 @@ impl<'a> TaskRepository<'a> {
     pub async fn recover_in_progress_graph_tasks_for_run(
         &self,
         run_id: Uuid,
+        clear_fields: Option<&[String]>,
     ) -> sqlx::Result<i64> {
-        self.recover_in_progress_graph_tasks_for_graph(&Self::run_id_to_graph_id(run_id))
-            .await
+        self.recover_in_progress_graph_tasks_for_graph(
+            &Self::run_id_to_graph_id(run_id),
+            clear_fields,
+        )
+        .await
     }
 
     pub async fn run_summary(
@@ -2697,6 +2714,113 @@ mod tests {
             first_hash, second_hash,
             "hash must be stable even when client round-trips the enriched response"
         );
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    // -----------------------------------------------------------------------
+    // Recovery field clearing tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_recover_preserves_execution_fields_by_default() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "recover-preserve-graph";
+
+        let mut task = graph_task("t1", Some("in_progress"), 10, &[]);
+        task["sandbox_id"] = "sandbox-abc".into();
+        task["workspace_commit"] = "deadbeef".into();
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[task])
+            .await
+            .unwrap();
+
+        let recovered = repo
+            .recover_in_progress_graph_tasks_for_graph(graph_id, None)
+            .await
+            .unwrap();
+        assert_eq!(recovered, 1);
+
+        let task = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        assert_eq!(graph_task_status(&task).as_deref(), Some("pending"));
+        assert_eq!(task["sandbox_id"], "sandbox-abc");
+        assert_eq!(task["workspace_commit"], "deadbeef");
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_recover_clears_specified_fields() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "recover-clear-graph";
+
+        let mut task = graph_task("t1", Some("in_progress"), 10, &[]);
+        task["sandbox_id"] = "sandbox-abc".into();
+        task["workspace_commit"] = "deadbeef".into();
+        task["priority"] = 99.into();
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[task])
+            .await
+            .unwrap();
+
+        let clear = vec!["sandbox_id".to_string(), "workspace_commit".to_string()];
+        let recovered = repo
+            .recover_in_progress_graph_tasks_for_graph(graph_id, Some(&clear))
+            .await
+            .unwrap();
+        assert_eq!(recovered, 1);
+
+        let task = repo
+            .get_graph_task_for_graph(graph_id, "t1")
+            .await
+            .unwrap()
+            .expect("task should exist");
+        assert_eq!(graph_task_status(&task).as_deref(), Some("pending"));
+        assert!(task.get("sandbox_id").is_none());
+        assert!(task.get("workspace_commit").is_none());
+        assert_eq!(task["priority"], 99);
+
+        cleanup_graph_tasks(&pool, graph_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_recover_does_not_affect_non_in_progress_tasks() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+        let graph_id = "recover-skip-graph";
+
+        let mut pending = graph_task("pending", Some("pending"), 10, &[]);
+        pending["sandbox_id"] = "s1".into();
+        let mut complete = graph_task("complete", Some("complete"), 10, &[]);
+        complete["sandbox_id"] = "s2".into();
+        let mut in_progress = graph_task("in_progress", Some("in_progress"), 10, &[]);
+        in_progress["sandbox_id"] = "s3".into();
+
+        repo.replace_graph_tasks_for_graph(graph_id, &[pending, complete, in_progress])
+            .await
+            .unwrap();
+
+        let clear = vec!["sandbox_id".to_string()];
+        let recovered = repo
+            .recover_in_progress_graph_tasks_for_graph(graph_id, Some(&clear))
+            .await
+            .unwrap();
+        assert_eq!(recovered, 1);
+
+        let pending_task = repo.get_graph_task_for_graph(graph_id, "pending").await.unwrap().unwrap();
+        let complete_task = repo.get_graph_task_for_graph(graph_id, "complete").await.unwrap().unwrap();
+        let in_progress_task = repo.get_graph_task_for_graph(graph_id, "in_progress").await.unwrap().unwrap();
+
+        assert_eq!(pending_task["sandbox_id"], "s1");
+        assert_eq!(complete_task["sandbox_id"], "s2");
+        assert!(in_progress_task.get("sandbox_id").is_none());
+        assert_eq!(graph_task_status(&in_progress_task).as_deref(), Some("pending"));
 
         cleanup_graph_tasks(&pool, graph_id).await;
     }

@@ -210,6 +210,7 @@ export DATABASE_URL=postgres://chenhui@localhost:5432/limenet?options=-csearch_p
 - 依赖解锁当前主要依赖轮询，不是纯事件驱动
 - 配置项已环境变量化（`DATABASE_URL`、`LIMENET_BIND`、`LIMENET_INSTANCE_ID`），其他参数仍以代码内默认值为主
 - 目前没有 Web UI、鉴权、分布式部署或隔离沙箱
+- **LimeNet 不管理执行环境状态**：工作区准备（workspace prepare）、Git 仓库状态、沙箱生命周期与恢复、bundle 导入等都属于执行后端（execution backend）的职责范围。LimeNet 的 `recover` 端点仅将任务状态从 `in_progress` 重置为 `pending`；执行后端必须在恢复后自行验证工作区完整性，避免因空工作区或未完成 bundle 导入导致的误报（如错误的 ancestry 失败）。需要清除任务数据中的执行环境字段时，调用 `recover` 时可显式传入 `clear_fields` 参数。
 
 ## 文档维护建议
 

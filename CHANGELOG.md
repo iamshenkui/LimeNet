@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `POST /api/v1/runs/{run_id}/graph/tasks/recover` 和 `POST /api/v1/graphs/{graph_id}/tasks/recover` 支持可选请求体 `{"clear_fields": ["field1", "field2"]}`，恢复 `in_progress` 任务时可显式清除指定的执行环境元数据字段，避免沙箱恢复后携带已失效的工作区或 Git 状态
+- 文档明确声明 LimeNet 不管理执行环境状态（workspace prepare、Git 状态、沙箱恢复、bundle 导入），相关职责由执行后端承担；`recover` 端点的 `clear_fields` 参数为执行后端提供重置任务元数据的能力
+
 ### Changed
 
 - Graph task API 路由从 `/api/v1/graph/tasks/*` 迁移到 `/api/v1/graphs/{graph_id}/tasks/*`，所有 list、get、upsert、delete、ordering 路径现在要求显式 `graph_id`

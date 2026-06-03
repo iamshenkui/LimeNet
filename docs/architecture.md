@@ -127,3 +127,4 @@ Agent 提交结果后：
 - `capabilities` 已进入请求模型，但暂未参与调度过滤
 - `Notify` 已初始化，但依赖解锁当前主要仍依赖轮询扫描
 - 若任务没有配置 `validation_script`，提交后会停留在 `EVALUATING`
+- LimeNet 不管理执行环境状态。工作区准备、Git 仓库状态、沙箱生命周期与恢复、bundle 导入等由执行后端（如 OpenSandbox）负责。`recover` 端点仅重置任务状态为 `pending`；执行后端恢复后应自行验证工作区完整性，必要时通过 `clear_fields` 参数清除任务中已失效的执行元数据（如 `sandbox_id`、`workspace_commit`），避免空工作区或未完成 bundle 导入导致后续误报（如 false ancestry failure）

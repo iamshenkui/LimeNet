@@ -56,6 +56,12 @@ struct RunSummaryQuery {
     include_next: bool,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct RecoverRequest {
+    #[serde(default)]
+    clear_fields: Vec<String>,
+}
+
 async fn list_graph_tasks(
     State(state): State<Arc<AppState>>,
     Path(graph_id): Path<String>,
@@ -358,13 +364,20 @@ async fn next_pending_graph_task_for_run(
 async fn recover_graph_tasks_for_run(
     State(state): State<Arc<AppState>>,
     Path(run_id): Path<uuid::Uuid>,
+    request: Option<Json<RecoverRequest>>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
     if let Err(response) = ensure_scoped_run(&repo, run_id).await {
         return response;
     }
 
-    match repo.recover_in_progress_graph_tasks_for_run(run_id).await {
+    let clear_fields = request.map(|Json(body)| body.clear_fields);
+    let clear_fields_ref = clear_fields.as_deref();
+
+    match repo
+        .recover_in_progress_graph_tasks_for_run(run_id, clear_fields_ref)
+        .await
+    {
         Ok(recovered_count) => (
             StatusCode::OK,
             Json(json!({ "run_id": run_id, "recovered_count": recovered_count })),
@@ -470,9 +483,16 @@ async fn next_pending_graph_task(
 async fn recover_graph_tasks(
     State(state): State<Arc<AppState>>,
     Path(graph_id): Path<String>,
+    request: Option<Json<RecoverRequest>>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
-    match repo.recover_in_progress_graph_tasks_for_graph(&graph_id).await {
+    let clear_fields = request.map(|Json(body)| body.clear_fields);
+    let clear_fields_ref = clear_fields.as_deref();
+
+    match repo
+        .recover_in_progress_graph_tasks_for_graph(&graph_id, clear_fields_ref)
+        .await
+    {
         Ok(recovered_count) => (
             StatusCode::OK,
             Json(json!({ "graph_id": graph_id, "recovered_count": recovered_count })),
@@ -1985,5 +2005,30 @@ mod tests {
             "health response must not contain raw credentials"
         );
         assert_eq!(body["database_target"], "host:5432/db");
+    }
+
+    // -------------------------------------------------------------------
+    // Recover-request parsing tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_recover_request_deserializes_with_clear_fields() {
+        let json = r#"{"clear_fields":["sandbox_id","workspace_commit"]}"#;
+        let req: RecoverRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.clear_fields, vec!["sandbox_id", "workspace_commit"]);
+    }
+
+    #[test]
+    fn test_recover_request_deserializes_empty_object() {
+        let json = r#"{}"#;
+        let req: RecoverRequest = serde_json::from_str(json).unwrap();
+        assert!(req.clear_fields.is_empty());
+    }
+
+    #[test]
+    fn test_recover_request_deserializes_empty_array() {
+        let json = r#"{"clear_fields":[]}"#;
+        let req: RecoverRequest = serde_json::from_str(json).unwrap();
+        assert!(req.clear_fields.is_empty());
     }
 }

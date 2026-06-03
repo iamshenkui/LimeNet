@@ -187,6 +187,27 @@ Graph-scoped `next_pending` 有可运行任务时返回：
 }
 ```
 
+### 任务恢复 (`recover`)
+
+`POST /api/v1/runs/{run_id}/graph/tasks/recover` 和 `POST /api/v1/graphs/{graph_id}/tasks/recover` 将状态为 `in_progress` 的任务重置为 `pending`，以便在租约丢失或执行环境异常后重新调度。
+
+可选请求体支持 `clear_fields` 数组，用于在恢复时清除任务数据中指定的执行环境字段，防止沙箱恢复后继续携带已失效的工作区或 Git 状态：
+
+```json
+{
+  "clear_fields": ["sandbox_id", "workspace_commit", "git_bundle_imported"]
+}
+```
+
+不提供请求体或 `clear_fields` 为空数组时，仅重置 `status`，保留其他字段不变。恢复成功返回：
+
+```json
+{
+  "graph_id": "demo-graph",
+  "recovered_count": 3
+}
+```
+
 ## `POST /api/v1/tasks/batch`
 
 批量写入任务图。
