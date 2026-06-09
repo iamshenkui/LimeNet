@@ -624,12 +624,28 @@ async fn upsert_governance_artifact(
     let repo = TaskRepository::new(&state.pool);
     match repo.upsert_governance_artifact(&artifact).await {
         Ok(()) => (StatusCode::OK, Json(artifact)).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => governance_artifact_error_response(e),
     }
+}
+
+fn governance_artifact_error_response(err: sqlx::Error) -> Response {
+    if let sqlx::Error::Database(database_error) = &err {
+        if matches!(
+            database_error.code().as_deref(),
+            Some("23502" | "23503" | "23514")
+        ) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": database_error.message() })),
+            )
+                .into_response();
+        }
+    }
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": err.to_string() })),
+    )
+        .into_response()
 }
 
 async fn get_governance_artifact(
