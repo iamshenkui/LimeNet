@@ -1,4 +1,7 @@
-use crate::contracts::{Lease, Payload, RetryLogic, Task, TaskRow, TaskStatus};
+use crate::contracts::{
+    ArtifactKind, ExecutorRole, GovernanceArtifact, Lease, Payload, RetryLogic, Task, TaskKind,
+    TaskMetadata, TaskRow, TaskStatus,
+};
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -120,6 +123,8 @@ pub struct BatchTaskInput {
     pub parent_ids: Vec<Uuid>,
     pub child_ids: Vec<Uuid>,
     pub payload: Payload,
+    #[serde(default)]
+    pub metadata: TaskMetadata,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -137,6 +142,25 @@ pub struct SubmitRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct SubmitResult {
     pub task_id: Uuid,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct GovernanceArtifactRow {
+    artifact_id: String,
+    artifact_kind: String,
+    task_id: Uuid,
+    repo: String,
+    base_sha: String,
+    head_sha: String,
+    created_at: DateTime<Utc>,
+    producer_role: String,
+    payload: Value,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ClaimFilter {
+    pub task_kind: Option<TaskKind>,
+    pub executor_role: Option<ExecutorRole>,
 }
 
 #[derive(Debug)]
@@ -175,6 +199,28 @@ impl From<sqlx::Error> for HeartbeatError {
 impl From<sqlx::Error> for BatchError {
     fn from(err: sqlx::Error) -> Self {
         BatchError::SqlxError(err)
+    }
+}
+
+impl TryFrom<GovernanceArtifactRow> for GovernanceArtifact {
+    type Error = sqlx::Error;
+
+    fn try_from(row: GovernanceArtifactRow) -> Result<Self, Self::Error> {
+        let artifact_kind =
+            ArtifactKind::try_from(row.artifact_kind.as_str()).map_err(sqlx::Error::Protocol)?;
+        let producer_role =
+            ExecutorRole::try_from(row.producer_role.as_str()).map_err(sqlx::Error::Protocol)?;
+        Ok(Self {
+            artifact_id: row.artifact_id,
+            artifact_kind,
+            task_id: row.task_id,
+            repo: row.repo,
+            base_sha: row.base_sha,
+            head_sha: row.head_sha,
+            created_at: row.created_at,
+            producer_role,
+            payload: row.payload,
+        })
     }
 }
 
@@ -275,7 +321,10 @@ impl<'a> TaskRepository<'a> {
             return Ok(CreateRunOutcome { run, created: true });
         }
 
-        let run = self.get_run(run_id).await?.ok_or(sqlx::Error::RowNotFound)?;
+        let run = self
+            .get_run(run_id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)?;
         Ok(CreateRunOutcome {
             run,
             created: false,
@@ -441,9 +490,9 @@ impl<'a> TaskRepository<'a> {
             sqlx::query(
                 r#"
                 INSERT INTO tasks (
-                    task_id, status, parent_ids, child_ids, payload,
+                    task_id, status, parent_ids, child_ids, payload, metadata,
                     lease, retry_logic, topological_level, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 "#,
             )
             .bind(task.task_id)
@@ -451,6 +500,7 @@ impl<'a> TaskRepository<'a> {
             .bind(&task.parent_ids)
             .bind(&task.child_ids)
             .bind(sqlx::types::Json(&task.payload))
+            .bind(sqlx::types::Json(&task.metadata))
             .bind(Option::<sqlx::types::Json<Lease>>::None)
             .bind(Option::<sqlx::types::Json<RetryLogic>>::None)
             .bind(topological_level)
@@ -473,9 +523,9 @@ impl<'a> TaskRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO tasks (
-                task_id, status, parent_ids, child_ids, payload,
+                task_id, status, parent_ids, child_ids, payload, metadata,
                 lease, retry_logic, topological_level, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
         )
         .bind(task.task_id)
@@ -483,6 +533,7 @@ impl<'a> TaskRepository<'a> {
         .bind(&task.parent_ids)
         .bind(&task.child_ids)
         .bind(sqlx::types::Json(&task.payload))
+        .bind(sqlx::types::Json(&task.metadata))
         .bind(task.lease.as_ref().map(sqlx::types::Json))
         .bind(task.retry_logic.as_ref().map(sqlx::types::Json))
         .bind(task.topological_level)
@@ -502,13 +553,67 @@ impl<'a> TaskRepository<'a> {
         Ok(row.map(Into::into))
     }
 
+    pub async fn upsert_governance_artifact(
+        &self,
+        artifact: &GovernanceArtifact,
+    ) -> sqlx::Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO governance_artifacts (
+                artifact_id, artifact_kind, task_id, repo, base_sha, head_sha,
+                created_at, producer_role, payload
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (artifact_id) DO UPDATE SET
+                artifact_kind = EXCLUDED.artifact_kind,
+                task_id = EXCLUDED.task_id,
+                repo = EXCLUDED.repo,
+                base_sha = EXCLUDED.base_sha,
+                head_sha = EXCLUDED.head_sha,
+                created_at = EXCLUDED.created_at,
+                producer_role = EXCLUDED.producer_role,
+                payload = EXCLUDED.payload
+            "#,
+        )
+        .bind(&artifact.artifact_id)
+        .bind(artifact.artifact_kind.as_str())
+        .bind(artifact.task_id)
+        .bind(&artifact.repo)
+        .bind(&artifact.base_sha)
+        .bind(&artifact.head_sha)
+        .bind(artifact.created_at)
+        .bind(artifact.producer_role.as_str())
+        .bind(&artifact.payload)
+        .execute(self.pool)
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn get_governance_artifact(
+        &self,
+        artifact_id: &str,
+    ) -> sqlx::Result<Option<GovernanceArtifact>> {
+        let row: Option<GovernanceArtifactRow> = sqlx::query_as(
+            r#"
+            SELECT artifact_id, artifact_kind, task_id, repo, base_sha, head_sha,
+                   created_at, producer_role, payload
+            FROM governance_artifacts
+            WHERE artifact_id = $1
+            "#,
+        )
+        .bind(artifact_id)
+        .fetch_optional(self.pool)
+        .await?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
     pub async fn list_graph_tasks(&self) -> sqlx::Result<Vec<Value>> {
         self.list_graph_tasks_for_run(DEFAULT_RUN_ID).await
     }
 
     pub async fn list_graph_tasks_for_run(&self, run_id: Uuid) -> sqlx::Result<Vec<Value>> {
         let rows: Vec<(Value,)> = sqlx::query_as(
-            "SELECT task_data FROM graph_tasks WHERE run_id = $1 ORDER BY task_order ASC"
+            "SELECT task_data FROM graph_tasks WHERE run_id = $1 ORDER BY task_order ASC",
         )
         .bind(run_id)
         .fetch_all(self.pool)
@@ -525,13 +630,12 @@ impl<'a> TaskRepository<'a> {
         run_id: Uuid,
         task_id: &str,
     ) -> sqlx::Result<Option<Value>> {
-        let row: Option<(Value,)> = sqlx::query_as(
-            "SELECT task_data FROM graph_tasks WHERE run_id = $1 AND task_id = $2"
-        )
-        .bind(run_id)
-        .bind(task_id)
-        .fetch_optional(self.pool)
-        .await?;
+        let row: Option<(Value,)> =
+            sqlx::query_as("SELECT task_data FROM graph_tasks WHERE run_id = $1 AND task_id = $2")
+                .bind(run_id)
+                .bind(task_id)
+                .fetch_optional(self.pool)
+                .await?;
         Ok(row.map(|(task_data,)| task_data))
     }
 
@@ -649,7 +753,8 @@ impl<'a> TaskRepository<'a> {
     }
 
     pub async fn replace_graph_tasks(&self, tasks: &[Value]) -> sqlx::Result<()> {
-        self.replace_graph_tasks_for_run(DEFAULT_RUN_ID, tasks).await
+        self.replace_graph_tasks_for_run(DEFAULT_RUN_ID, tasks)
+            .await
     }
 
     pub async fn replace_graph_tasks_for_run(
@@ -687,7 +792,8 @@ impl<'a> TaskRepository<'a> {
     }
 
     pub async fn upsert_graph_task(&self, task_id: &str, task: &Value) -> sqlx::Result<()> {
-        self.upsert_graph_task_for_run(DEFAULT_RUN_ID, task_id, task).await
+        self.upsert_graph_task_for_run(DEFAULT_RUN_ID, task_id, task)
+            .await
     }
 
     pub async fn upsert_graph_task_for_run(
@@ -697,23 +803,21 @@ impl<'a> TaskRepository<'a> {
         task: &Value,
     ) -> sqlx::Result<()> {
         self.ensure_run(run_id).await?;
-        let existing_order: Option<(i32,)> = sqlx::query_as(
-            "SELECT task_order FROM graph_tasks WHERE run_id = $1 AND task_id = $2"
-        )
-        .bind(run_id)
-        .bind(task_id)
-        .fetch_optional(self.pool)
-        .await?;
+        let existing_order: Option<(i32,)> =
+            sqlx::query_as("SELECT task_order FROM graph_tasks WHERE run_id = $1 AND task_id = $2")
+                .bind(run_id)
+                .bind(task_id)
+                .fetch_optional(self.pool)
+                .await?;
 
         let task_order = match existing_order {
             Some((order,)) => order,
             None => {
-                let next_order: (Option<i32>,) = sqlx::query_as(
-                    "SELECT MAX(task_order) FROM graph_tasks WHERE run_id = $1"
-                )
-                .bind(run_id)
-                .fetch_one(self.pool)
-                .await?;
+                let next_order: (Option<i32>,) =
+                    sqlx::query_as("SELECT MAX(task_order) FROM graph_tasks WHERE run_id = $1")
+                        .bind(run_id)
+                        .fetch_one(self.pool)
+                        .await?;
                 next_order.0.unwrap_or(-1) + 1
             }
         };
@@ -753,16 +857,17 @@ impl<'a> TaskRepository<'a> {
         self.ensure_run(run_id).await?;
         let mut tx = self.pool.begin().await?;
 
-        let anchor_row: Option<(i32,)> = sqlx::query_as(
-            "SELECT task_order FROM graph_tasks WHERE run_id = $1 AND task_id = $2"
-        )
-        .bind(run_id)
-        .bind(anchor_task_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+        let anchor_row: Option<(i32,)> =
+            sqlx::query_as("SELECT task_order FROM graph_tasks WHERE run_id = $1 AND task_id = $2")
+                .bind(run_id)
+                .bind(anchor_task_id)
+                .fetch_optional(&mut *tx)
+                .await?;
         let Some((anchor_order,)) = anchor_row else {
             tx.commit().await?;
-            return Err(GraphTaskInsertError::UnknownAnchor(anchor_task_id.to_string()));
+            return Err(GraphTaskInsertError::UnknownAnchor(
+                anchor_task_id.to_string(),
+            ));
         };
 
         for task in tasks {
@@ -772,7 +877,7 @@ impl<'a> TaskRepository<'a> {
             };
 
             let exists: Option<(String,)> = sqlx::query_as(
-                "SELECT task_id FROM graph_tasks WHERE run_id = $1 AND task_id = $2"
+                "SELECT task_id FROM graph_tasks WHERE run_id = $1 AND task_id = $2",
             )
             .bind(run_id)
             .bind(&task_id)
@@ -865,10 +970,7 @@ impl<'a> TaskRepository<'a> {
             .await
     }
 
-    pub async fn recover_in_progress_graph_tasks_for_run(
-        &self,
-        run_id: Uuid,
-    ) -> sqlx::Result<i64> {
+    pub async fn recover_in_progress_graph_tasks_for_run(&self, run_id: Uuid) -> sqlx::Result<i64> {
         let tasks = self.list_graph_tasks_for_run(run_id).await?;
         let mut recovered = 0_i64;
         let mut tx = self.pool.begin().await?;
@@ -883,14 +985,12 @@ impl<'a> TaskRepository<'a> {
             let task_id = graph_task_id(&task).ok_or_else(|| {
                 sqlx::Error::Protocol("graph task payload missing non-empty task_id".into())
             })?;
-            sqlx::query(
-                "UPDATE graph_tasks SET task_data = $1 WHERE run_id = $2 AND task_id = $3"
-            )
-            .bind(&task)
-            .bind(run_id)
-            .bind(task_id)
-            .execute(&mut *tx)
-            .await?;
+            sqlx::query("UPDATE graph_tasks SET task_data = $1 WHERE run_id = $2 AND task_id = $3")
+                .bind(&task)
+                .bind(run_id)
+                .bind(task_id)
+                .execute(&mut *tx)
+                .await?;
             recovered += 1;
         }
 
@@ -898,11 +998,7 @@ impl<'a> TaskRepository<'a> {
         Ok(recovered)
     }
 
-    pub async fn run_summary(
-        &self,
-        run_id: Uuid,
-        include_next: bool,
-    ) -> sqlx::Result<RunSummary> {
+    pub async fn run_summary(&self, run_id: Uuid, include_next: bool) -> sqlx::Result<RunSummary> {
         let rows: Vec<(Option<String>, i64)> = sqlx::query_as(
             r#"
             SELECT task_data->>'status' AS status, COUNT(*)::bigint
@@ -935,12 +1031,11 @@ impl<'a> TaskRepository<'a> {
             None
         };
 
-        let updated_at: (Option<DateTime<Utc>>,) = sqlx::query_as(
-            "SELECT MAX(updated_at) FROM graph_tasks WHERE run_id = $1",
-        )
-        .bind(run_id)
-        .fetch_one(self.pool)
-        .await?;
+        let updated_at: (Option<DateTime<Utc>>,) =
+            sqlx::query_as("SELECT MAX(updated_at) FROM graph_tasks WHERE run_id = $1")
+                .bind(run_id)
+                .fetch_one(self.pool)
+                .await?;
 
         Ok(RunSummary {
             run_id,
@@ -987,14 +1082,16 @@ impl<'a> TaskRepository<'a> {
             r#"
             UPDATE tasks
             SET status = $1, parent_ids = $2, child_ids = $3, payload = $4,
-                lease = $5, retry_logic = $6, topological_level = $7, updated_at = $8
-            WHERE task_id = $9
+                metadata = $5, lease = $6, retry_logic = $7, topological_level = $8,
+                updated_at = $9
+            WHERE task_id = $10
             "#,
         )
         .bind(task.status)
         .bind(&task.parent_ids)
         .bind(&task.child_ids)
         .bind(sqlx::types::Json(&task.payload))
+        .bind(sqlx::types::Json(&task.metadata))
         .bind(task.lease.as_ref().map(sqlx::types::Json))
         .bind(task.retry_logic.as_ref().map(sqlx::types::Json))
         .bind(task.topological_level)
@@ -1018,18 +1115,25 @@ impl<'a> TaskRepository<'a> {
         &self,
         agent_id: &str,
         expires_at: DateTime<Utc>,
+        filter: ClaimFilter,
     ) -> sqlx::Result<Option<Task>> {
         let mut tx = self.pool.begin().await?;
+        let task_kind = filter.task_kind.map(|kind| kind.as_str().to_string());
+        let executor_role = filter.executor_role.map(|role| role.as_str().to_string());
 
         let row: Option<TaskRow> = sqlx::query_as(
             r#"
             SELECT * FROM tasks
             WHERE status = 'READY'
+              AND ($1::text IS NULL OR metadata->>'task_kind' = $1)
+              AND ($2::text IS NULL OR metadata->>'executor_role' = $2)
             ORDER BY topological_level ASC, created_at ASC
             FOR UPDATE SKIP LOCKED
             LIMIT 1
             "#,
         )
+        .bind(task_kind)
+        .bind(executor_role)
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -1432,7 +1536,10 @@ impl From<sqlx::Error> for GraphTaskInsertError {
 }
 
 fn graph_task_id(task: &Value) -> Option<String> {
-    task.get("task_id")?.as_str().map(str::to_string).filter(|s| !s.is_empty())
+    task.get("task_id")?
+        .as_str()
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
 }
 
 fn graph_task_status(task: &Value) -> Option<String> {
@@ -1650,8 +1757,8 @@ mod tests {
     use crate::contracts::{Payload, TaskStatus};
 
     async fn test_pool() -> PgPool {
-        let database_url = crate::config::resolve_database_url()
-            .expect("DATABASE_URL must be set for tests");
+        let database_url =
+            crate::config::resolve_database_url().expect("DATABASE_URL must be set for tests");
         PgPool::connect(&database_url)
             .await
             .expect("Failed to connect to database")
@@ -1668,6 +1775,7 @@ mod tests {
                 context_paths: vec![],
                 validation_script: None,
             },
+            metadata: TaskMetadata::default(),
             lease: None,
             retry_logic: None,
             topological_level: 0,
@@ -1709,18 +1817,12 @@ mod tests {
 
         repo.ensure_run(run_a).await.unwrap();
         repo.ensure_run(run_b).await.unwrap();
-        repo.replace_graph_tasks_for_run(
-            run_a,
-            &[graph_task("same", Some("pending"), 10, &[])],
-        )
-        .await
-        .unwrap();
-        repo.replace_graph_tasks_for_run(
-            run_b,
-            &[graph_task("same", Some("pending"), 10, &[])],
-        )
-        .await
-        .unwrap();
+        repo.replace_graph_tasks_for_run(run_a, &[graph_task("same", Some("pending"), 10, &[])])
+            .await
+            .unwrap();
+        repo.replace_graph_tasks_for_run(run_b, &[graph_task("same", Some("pending"), 10, &[])])
+            .await
+            .unwrap();
 
         let tasks_a = repo.list_graph_tasks_for_run(run_a).await.unwrap();
         let tasks_b = repo.list_graph_tasks_for_run(run_b).await.unwrap();
@@ -1822,24 +1924,15 @@ mod tests {
 
         repo.ensure_run(run_a).await.unwrap();
         repo.ensure_run(run_b).await.unwrap();
-        repo.replace_graph_tasks_for_run(
-            run_a,
-            &[graph_task("a1", Some("pending"), 10, &[])],
-        )
-        .await
-        .unwrap();
-        repo.replace_graph_tasks_for_run(
-            run_b,
-            &[graph_task("b1", Some("pending"), 10, &[])],
-        )
-        .await
-        .unwrap();
-        repo.replace_graph_tasks_for_run(
-            run_a,
-            &[graph_task("a2", Some("pending"), 10, &[])],
-        )
-        .await
-        .unwrap();
+        repo.replace_graph_tasks_for_run(run_a, &[graph_task("a1", Some("pending"), 10, &[])])
+            .await
+            .unwrap();
+        repo.replace_graph_tasks_for_run(run_b, &[graph_task("b1", Some("pending"), 10, &[])])
+            .await
+            .unwrap();
+        repo.replace_graph_tasks_for_run(run_a, &[graph_task("a2", Some("pending"), 10, &[])])
+            .await
+            .unwrap();
 
         let tasks_a = repo.list_graph_tasks_for_run(run_a).await.unwrap();
         let tasks_b = repo.list_graph_tasks_for_run(run_b).await.unwrap();
@@ -1914,12 +2007,9 @@ mod tests {
         )
         .await
         .unwrap();
-        repo.replace_graph_tasks_for_run(
-            run_b,
-            &[graph_task("b1", Some("pending"), 10, &[])],
-        )
-        .await
-        .unwrap();
+        repo.replace_graph_tasks_for_run(run_b, &[graph_task("b1", Some("pending"), 10, &[])])
+            .await
+            .unwrap();
 
         let summary_a = repo.run_summary(run_a, false).await.unwrap();
         let summary_b = repo.run_summary(run_b, false).await.unwrap();
@@ -1991,7 +2081,11 @@ mod tests {
         repo.insert(&task).await.unwrap();
 
         let claimed = repo
-            .claim_ready("agent-1", Utc::now() + chrono::Duration::minutes(5))
+            .claim_ready(
+                "agent-1",
+                Utc::now() + chrono::Duration::minutes(5),
+                ClaimFilter::default(),
+            )
             .await
             .expect("claim failed");
 
@@ -2004,6 +2098,108 @@ mod tests {
         // also try to delete the one we inserted.
         repo.delete(claimed.task_id).await.unwrap();
         let _ = repo.delete(task.task_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_task_metadata_round_trip_and_filtered_claim() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let mut meta_task = test_task("claim_meta_agent_implementation");
+        meta_task.status = TaskStatus::Ready;
+        meta_task.metadata.task_kind = Some(TaskKind::Implementation);
+        meta_task.metadata.executor_role = Some(ExecutorRole::MetaAgent);
+        repo.insert(&meta_task).await.unwrap();
+
+        let mut review_task = test_task("claim_quartermaster_code_review");
+        review_task.status = TaskStatus::Ready;
+        review_task.metadata.task_kind = Some(TaskKind::CodeReview);
+        review_task.metadata.executor_role = Some(ExecutorRole::Quartermaster);
+        repo.insert(&review_task).await.unwrap();
+
+        let wrong_role = repo
+            .claim_ready(
+                "meta-agent-1",
+                Utc::now() + chrono::Duration::minutes(5),
+                ClaimFilter {
+                    task_kind: Some(TaskKind::CodeReview),
+                    executor_role: Some(ExecutorRole::MetaAgent),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(wrong_role.is_none());
+
+        let claimed = repo
+            .claim_ready(
+                "quartermaster-1",
+                Utc::now() + chrono::Duration::minutes(5),
+                ClaimFilter {
+                    task_kind: Some(TaskKind::CodeReview),
+                    executor_role: Some(ExecutorRole::Quartermaster),
+                },
+            )
+            .await
+            .unwrap()
+            .expect("quartermaster task should be claimed");
+        assert_eq!(claimed.task_id, review_task.task_id);
+        assert_eq!(claimed.metadata.task_kind, Some(TaskKind::CodeReview));
+        assert_eq!(
+            claimed.metadata.executor_role,
+            Some(ExecutorRole::Quartermaster)
+        );
+
+        let fetched = repo.get(meta_task.task_id).await.unwrap().unwrap();
+        assert_eq!(fetched.metadata.task_kind, Some(TaskKind::Implementation));
+        assert_eq!(
+            fetched.metadata.executor_role,
+            Some(ExecutorRole::MetaAgent)
+        );
+
+        repo.delete(claimed.task_id).await.unwrap();
+        repo.delete(meta_task.task_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_governance_artifact_upsert_round_trip() {
+        let pool = test_pool().await;
+        let repo = TaskRepository::new(&pool);
+
+        let mut task = test_task("governance_artifact_round_trip");
+        task.status = TaskStatus::Ready;
+        repo.insert(&task).await.unwrap();
+
+        let artifact = GovernanceArtifact {
+            artifact_id: format!("artifact-{}", task.task_id),
+            artifact_kind: ArtifactKind::CartographerPlanConfirmation,
+            task_id: task.task_id,
+            repo: "owner/repo".to_string(),
+            base_sha: "base".to_string(),
+            head_sha: "head".to_string(),
+            created_at: Utc::now(),
+            producer_role: ExecutorRole::Cartographer,
+            payload: json!({
+                "technical_plan_review": {
+                    "decision": "approve_plan"
+                }
+            }),
+        };
+
+        repo.upsert_governance_artifact(&artifact).await.unwrap();
+        let fetched = repo
+            .get_governance_artifact(&artifact.artifact_id)
+            .await
+            .unwrap()
+            .expect("artifact should exist");
+
+        assert_eq!(
+            fetched.artifact_kind,
+            ArtifactKind::CartographerPlanConfirmation
+        );
+        assert_eq!(fetched.producer_role, ExecutorRole::Cartographer);
+        assert_eq!(fetched.payload, artifact.payload);
+
+        repo.delete(task.task_id).await.unwrap();
     }
 
     #[tokio::test]
@@ -2082,6 +2278,7 @@ mod tests {
                 context_paths: vec![],
                 validation_script: None,
             },
+            metadata: TaskMetadata::default(),
         }];
 
         let result = repo.insert_batch(tasks).await.unwrap();
@@ -2112,6 +2309,7 @@ mod tests {
                     context_paths: vec![],
                     validation_script: None,
                 },
+                metadata: TaskMetadata::default(),
             },
             BatchTaskInput {
                 task_id: child_id,
@@ -2122,6 +2320,7 @@ mod tests {
                     context_paths: vec![],
                     validation_script: None,
                 },
+                metadata: TaskMetadata::default(),
             },
         ];
 
@@ -2158,6 +2357,7 @@ mod tests {
                     context_paths: vec![],
                     validation_script: None,
                 },
+                metadata: TaskMetadata::default(),
             },
             BatchTaskInput {
                 task_id: task_b,
@@ -2168,6 +2368,7 @@ mod tests {
                     context_paths: vec![],
                     validation_script: None,
                 },
+                metadata: TaskMetadata::default(),
             },
         ];
 

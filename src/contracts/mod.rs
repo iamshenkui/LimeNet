@@ -14,5 +14,6 @@ pub use evidence_rollup::EvidenceRollup;
 pub use ownership::{BackendKind, Ownership, OwnershipError, OwnershipMode};
 pub use review_surface::ReviewSurface;
 pub use task::{
-    ClaimRequest, HeartbeatRequest, Lease, Payload, RetryLogic, Task, TaskRow, TaskStatus,
+    ArtifactKind, ArtifactRefs, ClaimRequest, ExecutorRole, GovernanceArtifact, HeartbeatRequest,
+    Lease, Payload, RetryLogic, TargetRef, Task, TaskKind, TaskMetadata, TaskRow, TaskStatus,
 };
