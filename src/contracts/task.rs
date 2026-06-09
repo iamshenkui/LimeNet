@@ -128,7 +128,7 @@ pub struct ArtifactRefs {
     pub outputs: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TaskMetadata {
     #[serde(default)]
     pub task_kind: Option<TaskKind>,
@@ -138,6 +138,8 @@ pub struct TaskMetadata {
     pub target_ref: Option<TargetRef>,
     #[serde(default)]
     pub artifacts: ArtifactRefs,
+    #[serde(default, flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
