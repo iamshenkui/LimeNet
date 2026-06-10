@@ -569,7 +569,6 @@ impl<'a> TaskRepository<'a> {
                 repo = EXCLUDED.repo,
                 base_sha = EXCLUDED.base_sha,
                 head_sha = EXCLUDED.head_sha,
-                created_at = EXCLUDED.created_at,
                 producer_role = EXCLUDED.producer_role,
                 payload = EXCLUDED.payload
             "#,
@@ -1121,21 +1120,68 @@ impl<'a> TaskRepository<'a> {
         let task_kind = filter.task_kind.map(|kind| kind.as_str().to_string());
         let executor_role = filter.executor_role.map(|role| role.as_str().to_string());
 
-        let row: Option<TaskRow> = sqlx::query_as(
-            r#"
-            SELECT * FROM tasks
-            WHERE status = 'READY'
-              AND ($1::text IS NULL OR metadata->>'task_kind' = $1)
-              AND ($2::text IS NULL OR metadata->>'executor_role' = $2)
-            ORDER BY topological_level ASC, created_at ASC
-            FOR UPDATE SKIP LOCKED
-            LIMIT 1
-            "#,
-        )
-        .bind(task_kind)
-        .bind(executor_role)
-        .fetch_optional(&mut *tx)
-        .await?;
+        let row: Option<TaskRow> = match (task_kind.as_deref(), executor_role.as_deref()) {
+            (Some(kind), Some(role)) => {
+                sqlx::query_as(
+                    r#"
+                    SELECT * FROM tasks
+                    WHERE status = 'READY'
+                      AND metadata->>'task_kind' = $1
+                      AND metadata->>'executor_role' = $2
+                    ORDER BY topological_level ASC, created_at ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                    "#,
+                )
+                .bind(kind)
+                .bind(role)
+                .fetch_optional(&mut *tx)
+                .await?
+            }
+            (Some(kind), None) => {
+                sqlx::query_as(
+                    r#"
+                    SELECT * FROM tasks
+                    WHERE status = 'READY'
+                      AND metadata->>'task_kind' = $1
+                    ORDER BY topological_level ASC, created_at ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                    "#,
+                )
+                .bind(kind)
+                .fetch_optional(&mut *tx)
+                .await?
+            }
+            (None, Some(role)) => {
+                sqlx::query_as(
+                    r#"
+                    SELECT * FROM tasks
+                    WHERE status = 'READY'
+                      AND metadata->>'executor_role' = $1
+                    ORDER BY topological_level ASC, created_at ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                    "#,
+                )
+                .bind(role)
+                .fetch_optional(&mut *tx)
+                .await?
+            }
+            (None, None) => {
+                sqlx::query_as(
+                    r#"
+                    SELECT * FROM tasks
+                    WHERE status = 'READY'
+                    ORDER BY topological_level ASC, created_at ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                    "#,
+                )
+                .fetch_optional(&mut *tx)
+                .await?
+            }
+        };
 
         let Some(row) = row else {
             tx.commit().await?;

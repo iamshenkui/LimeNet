@@ -2,11 +2,11 @@ ALTER TABLE tasks
     ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_tasks_ready_executor_role
-ON tasks ((metadata->>'executor_role'), status)
+ON tasks ((metadata->>'executor_role'))
 WHERE status = 'READY';
 
 CREATE INDEX IF NOT EXISTS idx_tasks_ready_task_kind
-ON tasks ((metadata->>'task_kind'), status)
+ON tasks ((metadata->>'task_kind'))
 WHERE status = 'READY';
 
 CREATE TABLE IF NOT EXISTS governance_artifacts (
