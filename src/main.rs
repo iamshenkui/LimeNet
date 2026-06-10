@@ -17,13 +17,13 @@ use tokio::sync::Notify;
 
 use limenet::contracts::{
     ClaimRequest, DelegationContract, DeliveryPackage, DeliveryStatus, EvidenceRollup,
-    HeartbeatRequest, Ownership,
+    GovernanceArtifact, HeartbeatRequest, Ownership,
 };
 use limenet::observe::{
     ObserveConfig, ObserveInstance, ObserveRepository, http_origin, resolve_observe_bind_address,
 };
 use limenet::state::{
-    BackoffAwakener, BatchError, BatchTaskInput, CreateRunInput, DEFAULT_RUN_ID,
+    BackoffAwakener, BatchError, BatchTaskInput, ClaimFilter, CreateRunInput, DEFAULT_RUN_ID,
     DependencyResolver, GraphTaskInsertError, HeartbeatError, LeaseReaper, SubmitError,
     SubmitRequest, TaskProgressInput, TaskRepository, TaskResultInput, TaskViewError,
 };
@@ -596,9 +596,66 @@ async fn claim_task(
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
     let expires_at = chrono::Utc::now() + chrono::Duration::minutes(15);
-    match repo.claim_ready(&request.agent_id, expires_at).await {
+    match repo
+        .claim_ready(
+            &request.agent_id,
+            expires_at,
+            ClaimFilter {
+                task_kind: request.task_kind,
+                executor_role: request.executor_role,
+            },
+        )
+        .await
+    {
         Ok(Some(task)) => (StatusCode::OK, Json(task)).into_response(),
         Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn upsert_governance_artifact(
+    State(state): State<Arc<AppState>>,
+    Json(artifact): Json<GovernanceArtifact>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.upsert_governance_artifact(&artifact).await {
+        Ok(()) => (StatusCode::OK, Json(artifact)).into_response(),
+        Err(e) => governance_artifact_error_response(e),
+    }
+}
+
+fn governance_artifact_error_response(err: sqlx::Error) -> Response {
+    if let sqlx::Error::Database(database_error) = &err {
+        if matches!(
+            database_error.code().as_deref(),
+            Some("23502" | "23503" | "23514")
+        ) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": database_error.message() })),
+            )
+                .into_response();
+        }
+    }
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": err.to_string() })),
+    )
+        .into_response()
+}
+
+async fn get_governance_artifact(
+    State(state): State<Arc<AppState>>,
+    Path(artifact_id): Path<String>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo.get_governance_artifact(&artifact_id).await {
+        Ok(Some(artifact)) => (StatusCode::OK, Json(artifact)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -1060,6 +1117,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/tasks/claim", post(claim_task))
         .route("/api/v1/tasks/{task_id}/heartbeat", post(heartbeat_task))
         .route("/api/v1/tasks/{task_id}/submit", post(submit_task))
+        .route(
+            "/api/v1/governance/artifacts",
+            post(upsert_governance_artifact),
+        )
+        .route(
+            "/api/v1/governance/artifacts/{artifact_id}",
+            get(get_governance_artifact),
+        )
         .route("/api/v1/delegations/ingest", post(delegation_ingest))
         .route("/api/v1/deliveries/package", post(delivery_package_ingest))
         .route("/api/v1/deliveries/evidence", post(evidence_rollup_ingest))

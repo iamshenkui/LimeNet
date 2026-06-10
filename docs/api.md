@@ -295,6 +295,20 @@ Response:
       "instruction": "实现数据库连接池",
       "context_paths": ["src/db.rs"],
       "validation_script": "cargo test"
+    },
+    "metadata": {
+      "task_kind": "implementation",
+      "executor_role": "meta-agent",
+      "target_ref": {
+        "repo": "owner/repo",
+        "base_branch": "main",
+        "head_branch": "codex/task-branch"
+      },
+      "artifacts": {
+        "inputs": ["plan-1"],
+        "outputs": []
+      },
+      "goal": "preserved generic metadata"
     }
   },
   {
@@ -316,6 +330,7 @@ Response:
 - 计算每个任务的 `topological_level`
 - 无父节点任务初始化为 `READY`
 - 其他任务初始化为 `PENDING`
+- `metadata` 是 JSONB；`task_kind`、`executor_role`、`target_ref`、`artifacts` 是可选治理字段，其他通用 metadata key 会原样保留
 
 ### Response
 
@@ -331,13 +346,17 @@ Response:
 ```json
 {
   "agent_id": "hermes-local-01",
-  "capabilities": ["coding", "rust"]
+  "capabilities": ["coding", "rust"],
+  "task_kind": "code_review",
+  "executor_role": "quartermaster"
 }
 ```
 
 ### Behavior
 
 - 仅从 `READY` 任务池挑选
+- 如果传入 `task_kind`，仅申领 `metadata.task_kind` 匹配的任务
+- 如果传入 `executor_role`，仅申领 `metadata.executor_role` 匹配的任务
 - 按 `topological_level ASC, created_at ASC` 排序
 - 使用 `FOR UPDATE SKIP LOCKED`
 - 成功后写入 15 分钟租约并转为 `IN_PROGRESS`
@@ -346,6 +365,42 @@ Response:
 
 - `200 OK`: 返回完整任务对象
 - `204 No Content`: 当前无可用任务
+
+## `POST /api/v1/governance/artifacts`
+
+写入或覆盖一个治理 artifact。
+
+### Request
+
+```json
+{
+  "artifact_id": "quartermaster-review-1",
+  "artifact_kind": "quartermaster_checkpoint_review",
+  "task_id": "11111111-1111-1111-1111-111111111111",
+  "repo": "owner/repo",
+  "base_sha": "base",
+  "head_sha": "head",
+  "producer_role": "quartermaster",
+  "created_at": "2026-06-09T00:00:00Z",
+  "payload": {
+    "decision": "continue"
+  }
+}
+```
+
+### Response
+
+- `200 OK`: 返回写入后的 artifact
+- `400 Bad Request`: artifact kind、producer role 或 task id 无效
+
+## `GET /api/v1/governance/artifacts/{artifact_id}`
+
+读取治理 artifact。
+
+### Response
+
+- `200 OK`: 返回完整 artifact
+- `404 Not Found`: artifact 不存在
 
 ## `POST /api/v1/tasks/{task_id}/heartbeat`
 
