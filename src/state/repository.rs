@@ -1509,7 +1509,7 @@ impl<'a> TaskRepository<'a> {
         sqlx::query(
             r#"
             UPDATE tasks
-            SET status = 'EVALUATING', updated_at = NOW()
+            SET status = 'COMPLETED', lease = NULL, updated_at = NOW()
             WHERE task_id = $1
             "#,
         )
@@ -1517,16 +1517,9 @@ impl<'a> TaskRepository<'a> {
         .execute(&mut *tx)
         .await?;
 
-        let validation_script = row.payload.0.validation_script.clone();
-
         tx.commit().await?;
 
-        if let Some(script) = validation_script {
-            let pool = Arc::new(self.pool.clone());
-            tokio::spawn(async move {
-                Self::run_validation_and_complete(pool, task_id, script);
-            });
-        }
+        self.resolve_dependencies(task_id).await?;
 
         Ok(SubmitResult { task_id })
     }
