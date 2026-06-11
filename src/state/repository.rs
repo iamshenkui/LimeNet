@@ -147,6 +147,13 @@ pub struct SubmitRequest {
     pub files_changed: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RetryRequest {
+    pub agent_id: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SubmitResult {
     pub task_id: Uuid,
@@ -1520,6 +1527,41 @@ impl<'a> TaskRepository<'a> {
         tx.commit().await?;
 
         self.resolve_dependencies(task_id).await?;
+
+        Ok(SubmitResult { task_id })
+    }
+
+    pub async fn retry_task(
+        &self,
+        task_id: Uuid,
+        agent_id: &str,
+        _reason: &str,
+    ) -> Result<SubmitResult, SubmitError> {
+        let row: Option<TaskRow> = sqlx::query_as(
+            r#"
+            SELECT * FROM tasks
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .fetch_optional(self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Err(SubmitError::TaskNotFound);
+        };
+
+        if row.status != TaskStatus::InProgress {
+            return Err(SubmitError::StatusMismatch);
+        }
+
+        let lease = row.lease.as_ref().ok_or(SubmitError::StatusMismatch)?;
+
+        if lease.agent_id != agent_id {
+            return Err(SubmitError::AgentMismatch);
+        }
+
+        self.backoff_task(task_id).await?;
 
         Ok(SubmitResult { task_id })
     }

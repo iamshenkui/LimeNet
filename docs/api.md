@@ -404,6 +404,79 @@ Response:
 - `200 OK`: 返回完整任务对象
 - `204 No Content`: 当前无可用任务
 
+## `POST /api/v1/tasks/{task_id}/heartbeat`
+
+续租当前 `IN_PROGRESS` native task。
+
+### Request
+
+```json
+{
+  "agent_id": "meta-agent-resident"
+}
+```
+
+### Response
+
+- `200 OK`: heartbeat accepted
+- `404 Not Found`: task 不存在或当前无有效 lease
+- `409 Conflict`: lease owner 与 `agent_id` 不匹配
+
+## `POST /api/v1/tasks/{task_id}/submit`
+
+提交当前 `IN_PROGRESS` native task 的成功结果。
+
+### Request
+
+```json
+{
+  "agent_id": "meta-agent-resident",
+  "result_summary": "implementation accepted",
+  "files_changed": ["src/lib.rs"]
+}
+```
+
+### Behavior
+
+- 只允许当前 lease owner 提交
+- 成功后任务转为 `COMPLETED`
+- LimeNet 只推进任务生命周期和依赖释放，不在服务进程 cwd 中执行 `validation_script`
+- 依赖该任务的 `PENDING` 子任务在所有父任务完成后转为 `READY`
+
+### Response
+
+- `202 Accepted`: 返回 `{ "task_id": "..." }`
+- `404 Not Found`: task 不存在
+- `409 Conflict`: task 不是 `IN_PROGRESS` 或缺少有效 lease
+- `403 Forbidden`: lease owner 与 `agent_id` 不匹配
+
+## `POST /api/v1/tasks/{task_id}/retry`
+
+提交当前 `IN_PROGRESS` native task 的失败/重试结果。
+
+### Request
+
+```json
+{
+  "agent_id": "meta-agent-resident",
+  "reason": "worker exited with code 137"
+}
+```
+
+### Behavior
+
+- 只允许当前 lease owner 提交 retry
+- 成功后任务转为 `BACKOFF`
+- `retry_logic.attempt_count` 递增，并设置 `backoff_until`
+- Backoff awakener 到期后将任务恢复为 `READY`
+
+### Response
+
+- `202 Accepted`: 返回 `{ "task_id": "..." }`
+- `404 Not Found`: task 不存在
+- `409 Conflict`: task 不是 `IN_PROGRESS` 或缺少有效 lease
+- `403 Forbidden`: lease owner 与 `agent_id` 不匹配
+
 ## `POST /api/v1/governance/artifacts`
 
 写入或覆盖一个治理 artifact。

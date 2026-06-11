@@ -25,7 +25,7 @@ use limenet::observe::{
 use limenet::state::{
     BackoffAwakener, BatchError, BatchTaskInput, ClaimFilter, CreateRunInput, DEFAULT_RUN_ID,
     DependencyResolver, GraphTaskInsertError, HeartbeatError, LeaseReaper, SubmitError,
-    SubmitRequest, TaskListFilter, TaskProgressInput, TaskRepository, TaskResultInput,
+    RetryRequest, SubmitRequest, TaskListFilter, TaskProgressInput, TaskRepository, TaskResultInput,
     TaskViewError,
 };
 
@@ -744,6 +744,28 @@ async fn submit_task(
     }
 }
 
+async fn retry_task(
+    State(state): State<Arc<AppState>>,
+    Path(task_id): Path<uuid::Uuid>,
+    Json(request): Json<RetryRequest>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo
+        .retry_task(task_id, &request.agent_id, &request.reason)
+        .await
+    {
+        Ok(result) => (StatusCode::ACCEPTED, Json(result)).into_response(),
+        Err(SubmitError::TaskNotFound) => StatusCode::NOT_FOUND.into_response(),
+        Err(SubmitError::StatusMismatch) => StatusCode::CONFLICT.into_response(),
+        Err(SubmitError::AgentMismatch) => StatusCode::FORBIDDEN.into_response(),
+        Err(SubmitError::SqlxError(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 /// Pure delegation ingest logic, free of AppState / database dependencies.
 ///
 /// Returns all received delegation fields in the response so that consumers
@@ -1153,6 +1175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/tasks/claim", post(claim_task))
         .route("/api/v1/tasks/{task_id}/heartbeat", post(heartbeat_task))
         .route("/api/v1/tasks/{task_id}/submit", post(submit_task))
+        .route("/api/v1/tasks/{task_id}/retry", post(retry_task))
         .route(
             "/api/v1/governance/artifacts",
             post(upsert_governance_artifact),
