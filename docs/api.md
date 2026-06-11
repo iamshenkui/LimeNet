@@ -337,6 +337,42 @@ Response:
 - `201 Created`: 返回创建的任务 ID 列表
 - `400 Bad Request`: 任务图存在循环依赖
 
+## `GET /api/v1/tasks`
+
+只读列出 native worker task queue 中的任务，用于 worker/resident 做 queue snapshot
+或无副作用地 peek 下一个可执行任务。
+
+### Query
+
+- `status`：可选，按 native task status 过滤，例如 `READY`。
+- `task_kind`：可选，按 `metadata.task_kind` 过滤。
+- `executor_role`：可选，按 `metadata.executor_role` 过滤。
+- `limit`：可选，默认 `100`，最大 `500`。
+
+### Response
+
+```json
+{
+  "tasks": [
+    {
+      "task_id": "11111111-1111-1111-1111-111111111111",
+      "status": "READY",
+      "parent_ids": [],
+      "child_ids": [],
+      "payload": {
+        "instruction": "实现数据库连接池",
+        "context_paths": ["src/db.rs"],
+        "validation_script": "cargo test"
+      },
+      "metadata": {
+        "task_kind": "implementation",
+        "executor_role": "meta-agent"
+      }
+    }
+  ]
+}
+```
+
 ## `POST /api/v1/tasks/claim`
 
 原子申领一个 `READY` 任务。
@@ -346,6 +382,7 @@ Response:
 ```json
 {
   "agent_id": "hermes-local-01",
+  "task_id": "11111111-1111-1111-1111-111111111111",
   "capabilities": ["coding", "rust"],
   "task_kind": "code_review",
   "executor_role": "quartermaster"
@@ -355,6 +392,7 @@ Response:
 ### Behavior
 
 - 仅从 `READY` 任务池挑选
+- 如果传入 `task_id`，仅申领该任务；不传时按筛选条件选择下一条 READY task
 - 如果传入 `task_kind`，仅申领 `metadata.task_kind` 匹配的任务
 - 如果传入 `executor_role`，仅申领 `metadata.executor_role` 匹配的任务
 - 按 `topological_level ASC, created_at ASC` 排序

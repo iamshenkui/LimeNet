@@ -209,6 +209,8 @@ pub struct GovernanceArtifact {
 pub struct ClaimRequest {
     pub agent_id: String,
     #[serde(default)]
+    pub task_id: Option<Uuid>,
+    #[serde(default)]
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub task_kind: Option<TaskKind>,

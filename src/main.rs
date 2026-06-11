@@ -25,7 +25,8 @@ use limenet::observe::{
 use limenet::state::{
     BackoffAwakener, BatchError, BatchTaskInput, ClaimFilter, CreateRunInput, DEFAULT_RUN_ID,
     DependencyResolver, GraphTaskInsertError, HeartbeatError, LeaseReaper, SubmitError,
-    SubmitRequest, TaskProgressInput, TaskRepository, TaskResultInput, TaskViewError,
+    SubmitRequest, TaskListFilter, TaskProgressInput, TaskRepository, TaskResultInput,
+    TaskViewError,
 };
 
 #[derive(Clone)]
@@ -57,6 +58,18 @@ struct GraphNextPendingRequest {
 struct RunSummaryQuery {
     #[serde(default)]
     include_next: bool,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TaskListQuery {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    task_kind: Option<String>,
+    #[serde(default)]
+    executor_role: Option<String>,
+    #[serde(default)]
+    limit: Option<i64>,
 }
 
 async fn list_graph_tasks(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -590,6 +603,27 @@ async fn create_tasks_batch(
     }
 }
 
+async fn list_tasks(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<TaskListQuery>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    let filter = TaskListFilter {
+        status: query.status.map(|value| value.to_ascii_uppercase()),
+        task_kind: query.task_kind,
+        executor_role: query.executor_role,
+        limit: query.limit.unwrap_or(100),
+    };
+    match repo.list_tasks(filter).await {
+        Ok(tasks) => (StatusCode::OK, Json(json!({ "tasks": tasks }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 async fn claim_task(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ClaimRequest>,
@@ -601,6 +635,7 @@ async fn claim_task(
             &request.agent_id,
             expires_at,
             ClaimFilter {
+                task_id: request.task_id,
                 task_kind: request.task_kind,
                 executor_role: request.executor_role,
             },
@@ -1113,6 +1148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/v1/graph/tasks/{task_id}",
             get(get_graph_task).put(upsert_graph_task),
         )
+        .route("/api/v1/tasks", get(list_tasks))
         .route("/api/v1/tasks/batch", post(create_tasks_batch))
         .route("/api/v1/tasks/claim", post(claim_task))
         .route("/api/v1/tasks/{task_id}/heartbeat", post(heartbeat_task))
