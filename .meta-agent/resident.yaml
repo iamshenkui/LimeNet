@@ -8,6 +8,23 @@ runtime:
     - meta-agent
     - cartographer
     - quartermaster
+  subscriptions:
+    - component: Cartographer
+      executor_role: cartographer
+      task_kinds:
+        - architecture_review
+      command:
+        - cartographer
+        - checkpoint-30
+      enabled: true
+    - component: Quartermaster
+      executor_role: quartermaster
+      task_kinds:
+        - code_review
+      command:
+        - quartermaster
+        - review
+      enabled: true
 detach:
   tmux:
     session_name: resident-limenet-meta-agent
