@@ -344,7 +344,9 @@ Response:
 
 ### Query
 
-- `status`：可选，按 native task status 过滤，例如 `READY`。
+- `status`：可选，按 native task status 过滤。允许值：
+  `PENDING`、`READY`、`IN_PROGRESS`、`EVALUATING`、`BACKOFF`、`COMPLETED`。
+  无效值返回 `400 Bad Request`。
 - `task_kind`：可选，按 `metadata.task_kind` 过滤。
 - `executor_role`：可选，按 `metadata.executor_role` 过滤。
 - `limit`：可选，默认 `100`，最大 `500`。

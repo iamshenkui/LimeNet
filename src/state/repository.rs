@@ -2360,6 +2360,7 @@ mod tests {
                 "meta-agent-1",
                 Utc::now() + chrono::Duration::minutes(5),
                 ClaimFilter {
+                    task_id: None,
                     task_kind: Some(TaskKind::CodeReview),
                     executor_role: Some(ExecutorRole::MetaAgent),
                 },
@@ -2373,6 +2374,7 @@ mod tests {
                 "quartermaster-1",
                 Utc::now() + chrono::Duration::minutes(5),
                 ClaimFilter {
+                    task_id: None,
                     task_kind: Some(TaskKind::CodeReview),
                     executor_role: Some(ExecutorRole::Quartermaster),
                 },

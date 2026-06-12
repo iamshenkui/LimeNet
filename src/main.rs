@@ -17,7 +17,7 @@ use tokio::sync::Notify;
 
 use limenet::contracts::{
     ClaimRequest, DelegationContract, DeliveryPackage, DeliveryStatus, EvidenceRollup,
-    GovernanceArtifact, HeartbeatRequest, Ownership,
+    GovernanceArtifact, HeartbeatRequest, Ownership, TaskStatus,
 };
 use limenet::observe::{
     ObserveConfig, ObserveInstance, ObserveRepository, http_origin, resolve_observe_bind_address,
@@ -608,8 +608,12 @@ async fn list_tasks(
     Query(query): Query<TaskListQuery>,
 ) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
+    let status = match normalize_task_status_query(query.status) {
+        Ok(status) => status,
+        Err(response) => return response,
+    };
     let filter = TaskListFilter {
-        status: query.status.map(|value| value.to_ascii_uppercase()),
+        status,
         task_kind: query.task_kind,
         executor_role: query.executor_role,
         limit: query.limit.unwrap_or(100),
@@ -622,6 +626,33 @@ async fn list_tasks(
         )
             .into_response(),
     }
+}
+
+fn normalize_task_status_query(status: Option<String>) -> Result<Option<String>, Response> {
+    let Some(raw) = status else {
+        return Ok(None);
+    };
+    let normalized = raw.trim().to_ascii_uppercase();
+    let allowed = [
+        TaskStatus::Pending.as_str(),
+        TaskStatus::Ready.as_str(),
+        TaskStatus::InProgress.as_str(),
+        TaskStatus::Evaluating.as_str(),
+        TaskStatus::Backoff.as_str(),
+        TaskStatus::Completed.as_str(),
+    ];
+    if allowed.contains(&normalized.as_str()) {
+        return Ok(Some(normalized));
+    }
+    Err((
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "error": "invalid_status",
+            "value": raw,
+            "allowed": allowed,
+        })),
+    )
+        .into_response())
 }
 
 async fn claim_task(
