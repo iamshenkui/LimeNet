@@ -333,6 +333,7 @@ Response:
 - 无父节点任务初始化为 `READY`
 - 其他任务初始化为 `PENDING`
 - `metadata` 是 JSONB；`tags`、`target_ref`、`artifacts` 是可选治理字段，其他通用 metadata key 会原样保留
+- `task_kind`、`executor_role` 仍作为 supported-but-deprecated metadata 字段被服务端保留和解析，用于旧客户端兼容；新订阅实现应使用 `tags`
 - `metadata.tags` 是订阅筛选的协议级 tag，不应使用组件仓库名作为 dispatch key
 
 ### Response
