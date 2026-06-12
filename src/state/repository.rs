@@ -21,6 +21,14 @@ pub struct TaskRepository<'a> {
     pool: &'a PgPool,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct TaskListFilter {
+    pub status: Option<String>,
+    pub task_kind: Option<String>,
+    pub executor_role: Option<String>,
+    pub limit: i64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateRunInput {
     #[serde(default)]
@@ -139,6 +147,13 @@ pub struct SubmitRequest {
     pub files_changed: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RetryRequest {
+    pub agent_id: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SubmitResult {
     pub task_id: Uuid,
@@ -159,6 +174,7 @@ struct GovernanceArtifactRow {
 
 #[derive(Debug, Clone, Default)]
 pub struct ClaimFilter {
+    pub task_id: Option<Uuid>,
     pub task_kind: Option<TaskKind>,
     pub executor_role: Option<ExecutorRole>,
 }
@@ -551,6 +567,138 @@ impl<'a> TaskRepository<'a> {
             .await?;
 
         Ok(row.map(Into::into))
+    }
+
+    pub async fn list_tasks(&self, filter: TaskListFilter) -> sqlx::Result<Vec<Task>> {
+        let limit = if filter.limit <= 0 { 100 } else { filter.limit.min(500) };
+        let rows: Vec<TaskRow> = match (
+            filter.status.as_deref(),
+            filter.task_kind.as_deref(),
+            filter.executor_role.as_deref(),
+        ) {
+            (Some(status), Some(kind), Some(role)) => {
+                sqlx::query_as(
+                    r#"
+                    SELECT * FROM tasks
+                    WHERE status = $1
+                      AND metadata->>'task_kind' = $2
+                      AND metadata->>'executor_role' = $3
+                    ORDER BY topological_level ASC, created_at ASC
+                    LIMIT $4
+                    "#,
+                )
+                .bind(status)
+                .bind(kind)
+                .bind(role)
+                .bind(limit)
+                .fetch_all(self.pool)
+                .await?
+            }
+            (Some(status), Some(kind), None) => {
+                sqlx::query_as(
+                    r#"
+                    SELECT * FROM tasks
+                    WHERE status = $1
+                      AND metadata->>'task_kind' = $2
+                    ORDER BY topological_level ASC, created_at ASC
+                    LIMIT $3
+                    "#,
+                )
+                .bind(status)
+                .bind(kind)
+                .bind(limit)
+                .fetch_all(self.pool)
+                .await?
+            }
+            (Some(status), None, Some(role)) => {
+                sqlx::query_as(
+                    r#"
+                    SELECT * FROM tasks
+                    WHERE status = $1
+                      AND metadata->>'executor_role' = $2
+                    ORDER BY topological_level ASC, created_at ASC
+                    LIMIT $3
+                    "#,
+                )
+                .bind(status)
+                .bind(role)
+                .bind(limit)
+                .fetch_all(self.pool)
+                .await?
+            }
+            (Some(status), None, None) => {
+                sqlx::query_as(
+                    r#"
+                    SELECT * FROM tasks
+                    WHERE status = $1
+                    ORDER BY topological_level ASC, created_at ASC
+                    LIMIT $2
+                    "#,
+                )
+                .bind(status)
+                .bind(limit)
+                .fetch_all(self.pool)
+                .await?
+            }
+            (None, Some(kind), Some(role)) => {
+                sqlx::query_as(
+                    r#"
+                    SELECT * FROM tasks
+                    WHERE metadata->>'task_kind' = $1
+                      AND metadata->>'executor_role' = $2
+                    ORDER BY topological_level ASC, created_at ASC
+                    LIMIT $3
+                    "#,
+                )
+                .bind(kind)
+                .bind(role)
+                .bind(limit)
+                .fetch_all(self.pool)
+                .await?
+            }
+            (None, Some(kind), None) => {
+                sqlx::query_as(
+                    r#"
+                    SELECT * FROM tasks
+                    WHERE metadata->>'task_kind' = $1
+                    ORDER BY topological_level ASC, created_at ASC
+                    LIMIT $2
+                    "#,
+                )
+                .bind(kind)
+                .bind(limit)
+                .fetch_all(self.pool)
+                .await?
+            }
+            (None, None, Some(role)) => {
+                sqlx::query_as(
+                    r#"
+                    SELECT * FROM tasks
+                    WHERE metadata->>'executor_role' = $1
+                    ORDER BY topological_level ASC, created_at ASC
+                    LIMIT $2
+                    "#,
+                )
+                .bind(role)
+                .bind(limit)
+                .fetch_all(self.pool)
+                .await?
+            }
+            (None, None, None) => {
+                sqlx::query_as(
+                    r#"
+                    SELECT * FROM tasks
+                    ORDER BY topological_level ASC, created_at ASC
+                    LIMIT $1
+                    "#,
+                )
+                .bind(limit)
+                .fetch_all(self.pool)
+                .await?
+            }
+        };
+
+        Ok(rows.into_iter().map(Into::into).collect())
     }
 
     pub async fn upsert_governance_artifact(
@@ -1117,10 +1265,25 @@ impl<'a> TaskRepository<'a> {
         filter: ClaimFilter,
     ) -> sqlx::Result<Option<Task>> {
         let mut tx = self.pool.begin().await?;
+        let task_id_filter = filter.task_id;
         let task_kind = filter.task_kind.map(|kind| kind.as_str().to_string());
         let executor_role = filter.executor_role.map(|role| role.as_str().to_string());
 
-        let row: Option<TaskRow> = match (task_kind.as_deref(), executor_role.as_deref()) {
+        let row: Option<TaskRow> = if let Some(task_id) = task_id_filter {
+            sqlx::query_as(
+                r#"
+                SELECT * FROM tasks
+                WHERE status = 'READY'
+                  AND task_id = $1
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+                "#,
+            )
+            .bind(task_id)
+            .fetch_optional(&mut *tx)
+            .await?
+        } else {
+            match (task_kind.as_deref(), executor_role.as_deref()) {
             (Some(kind), Some(role)) => {
                 sqlx::query_as(
                     r#"
@@ -1180,6 +1343,7 @@ impl<'a> TaskRepository<'a> {
                 )
                 .fetch_optional(&mut *tx)
                 .await?
+            }
             }
         };
 
@@ -1352,7 +1516,7 @@ impl<'a> TaskRepository<'a> {
         sqlx::query(
             r#"
             UPDATE tasks
-            SET status = 'EVALUATING', updated_at = NOW()
+            SET status = 'COMPLETED', lease = NULL, updated_at = NOW()
             WHERE task_id = $1
             "#,
         )
@@ -1360,16 +1524,44 @@ impl<'a> TaskRepository<'a> {
         .execute(&mut *tx)
         .await?;
 
-        let validation_script = row.payload.0.validation_script.clone();
-
         tx.commit().await?;
 
-        if let Some(script) = validation_script {
-            let pool = Arc::new(self.pool.clone());
-            tokio::spawn(async move {
-                Self::run_validation_and_complete(pool, task_id, script);
-            });
+        self.resolve_dependencies(task_id).await?;
+
+        Ok(SubmitResult { task_id })
+    }
+
+    pub async fn retry_task(
+        &self,
+        task_id: Uuid,
+        agent_id: &str,
+        _reason: &str,
+    ) -> Result<SubmitResult, SubmitError> {
+        let row: Option<TaskRow> = sqlx::query_as(
+            r#"
+            SELECT * FROM tasks
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .fetch_optional(self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Err(SubmitError::TaskNotFound);
+        };
+
+        if row.status != TaskStatus::InProgress {
+            return Err(SubmitError::StatusMismatch);
         }
+
+        let lease = row.lease.as_ref().ok_or(SubmitError::StatusMismatch)?;
+
+        if lease.agent_id != agent_id {
+            return Err(SubmitError::AgentMismatch);
+        }
+
+        self.backoff_task(task_id).await?;
 
         Ok(SubmitResult { task_id })
     }
@@ -2168,6 +2360,7 @@ mod tests {
                 "meta-agent-1",
                 Utc::now() + chrono::Duration::minutes(5),
                 ClaimFilter {
+                    task_id: None,
                     task_kind: Some(TaskKind::CodeReview),
                     executor_role: Some(ExecutorRole::MetaAgent),
                 },
@@ -2181,6 +2374,7 @@ mod tests {
                 "quartermaster-1",
                 Utc::now() + chrono::Duration::minutes(5),
                 ClaimFilter {
+                    task_id: None,
                     task_kind: Some(TaskKind::CodeReview),
                     executor_role: Some(ExecutorRole::Quartermaster),
                 },

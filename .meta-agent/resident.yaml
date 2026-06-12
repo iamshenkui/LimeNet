@@ -1,0 +1,32 @@
+runtime:
+  idle_poll_seconds: 15
+  auto_recover_in_progress: true
+  task_seed_file: tasks/resident-limenet-task-state-isolation/tasks.json
+  max_iterations: 0
+  snapshot_limit: 20
+  subscribed_roles:
+    - meta-agent
+    - cartographer
+    - quartermaster
+  subscriptions:
+    - component: Cartographer
+      executor_role: cartographer
+      task_kinds:
+        - architecture_review
+      command:
+        - cartographer
+        - checkpoint-30
+      enabled: true
+    - component: Quartermaster
+      executor_role: quartermaster
+      task_kinds:
+        - code_review
+      command:
+        - quartermaster
+        - review
+      enabled: true
+detach:
+  tmux:
+    session_name: resident-limenet-meta-agent
+    log_path: .state/logs/resident-limenet-meta-agent.log
+    force_restart_default: false

@@ -337,6 +337,44 @@ Response:
 - `201 Created`: 返回创建的任务 ID 列表
 - `400 Bad Request`: 任务图存在循环依赖
 
+## `GET /api/v1/tasks`
+
+只读列出 native worker task queue 中的任务，用于 worker/resident 做 queue snapshot
+或无副作用地 peek 下一个可执行任务。
+
+### Query
+
+- `status`：可选，按 native task status 过滤。允许值：
+  `PENDING`、`READY`、`IN_PROGRESS`、`EVALUATING`、`BACKOFF`、`COMPLETED`。
+  无效值返回 `400 Bad Request`。
+- `task_kind`：可选，按 `metadata.task_kind` 过滤。
+- `executor_role`：可选，按 `metadata.executor_role` 过滤。
+- `limit`：可选，默认 `100`，最大 `500`。
+
+### Response
+
+```json
+{
+  "tasks": [
+    {
+      "task_id": "11111111-1111-1111-1111-111111111111",
+      "status": "READY",
+      "parent_ids": [],
+      "child_ids": [],
+      "payload": {
+        "instruction": "实现数据库连接池",
+        "context_paths": ["src/db.rs"],
+        "validation_script": "cargo test"
+      },
+      "metadata": {
+        "task_kind": "implementation",
+        "executor_role": "meta-agent"
+      }
+    }
+  ]
+}
+```
+
 ## `POST /api/v1/tasks/claim`
 
 原子申领一个 `READY` 任务。
@@ -346,6 +384,7 @@ Response:
 ```json
 {
   "agent_id": "hermes-local-01",
+  "task_id": "11111111-1111-1111-1111-111111111111",
   "capabilities": ["coding", "rust"],
   "task_kind": "code_review",
   "executor_role": "quartermaster"
@@ -355,6 +394,7 @@ Response:
 ### Behavior
 
 - 仅从 `READY` 任务池挑选
+- 如果传入 `task_id`，仅申领该任务；不传时按筛选条件选择下一条 READY task
 - 如果传入 `task_kind`，仅申领 `metadata.task_kind` 匹配的任务
 - 如果传入 `executor_role`，仅申领 `metadata.executor_role` 匹配的任务
 - 按 `topological_level ASC, created_at ASC` 排序
@@ -365,6 +405,79 @@ Response:
 
 - `200 OK`: 返回完整任务对象
 - `204 No Content`: 当前无可用任务
+
+## `POST /api/v1/tasks/{task_id}/heartbeat`
+
+续租当前 `IN_PROGRESS` native task。
+
+### Request
+
+```json
+{
+  "agent_id": "meta-agent-resident"
+}
+```
+
+### Response
+
+- `200 OK`: heartbeat accepted
+- `404 Not Found`: task 不存在或当前无有效 lease
+- `409 Conflict`: lease owner 与 `agent_id` 不匹配
+
+## `POST /api/v1/tasks/{task_id}/submit`
+
+提交当前 `IN_PROGRESS` native task 的成功结果。
+
+### Request
+
+```json
+{
+  "agent_id": "meta-agent-resident",
+  "result_summary": "implementation accepted",
+  "files_changed": ["src/lib.rs"]
+}
+```
+
+### Behavior
+
+- 只允许当前 lease owner 提交
+- 成功后任务转为 `COMPLETED`
+- LimeNet 只推进任务生命周期和依赖释放，不在服务进程 cwd 中执行 `validation_script`
+- 依赖该任务的 `PENDING` 子任务在所有父任务完成后转为 `READY`
+
+### Response
+
+- `202 Accepted`: 返回 `{ "task_id": "..." }`
+- `404 Not Found`: task 不存在
+- `409 Conflict`: task 不是 `IN_PROGRESS` 或缺少有效 lease
+- `403 Forbidden`: lease owner 与 `agent_id` 不匹配
+
+## `POST /api/v1/tasks/{task_id}/retry`
+
+提交当前 `IN_PROGRESS` native task 的失败/重试结果。
+
+### Request
+
+```json
+{
+  "agent_id": "meta-agent-resident",
+  "reason": "worker exited with code 137"
+}
+```
+
+### Behavior
+
+- 只允许当前 lease owner 提交 retry
+- 成功后任务转为 `BACKOFF`
+- `retry_logic.attempt_count` 递增，并设置 `backoff_until`
+- Backoff awakener 到期后将任务恢复为 `READY`
+
+### Response
+
+- `202 Accepted`: 返回 `{ "task_id": "..." }`
+- `404 Not Found`: task 不存在
+- `409 Conflict`: task 不是 `IN_PROGRESS` 或缺少有效 lease
+- `403 Forbidden`: lease owner 与 `agent_id` 不匹配
 
 ## `POST /api/v1/governance/artifacts`
 
