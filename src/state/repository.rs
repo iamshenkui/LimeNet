@@ -159,8 +159,29 @@ struct GovernanceArtifactRow {
 
 #[derive(Debug, Clone, Default)]
 pub struct ClaimFilter {
+    pub match_all_tags: Vec<String>,
+    pub match_any_tags: Vec<String>,
     pub task_kind: Option<TaskKind>,
     pub executor_role: Option<ExecutorRole>,
+}
+
+fn normalize_tags(tags: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for tag in tags {
+        let tag = tag.trim().to_string();
+        if !tag.is_empty() && !normalized.contains(&tag) {
+            normalized.push(tag);
+        }
+    }
+    normalized
+}
+
+fn optional_text_array(tags: &[String]) -> Option<Vec<String>> {
+    if tags.is_empty() {
+        None
+    } else {
+        Some(tags.to_vec())
+    }
 }
 
 #[derive(Debug)]
@@ -1119,69 +1140,28 @@ impl<'a> TaskRepository<'a> {
         let mut tx = self.pool.begin().await?;
         let task_kind = filter.task_kind.map(|kind| kind.as_str().to_string());
         let executor_role = filter.executor_role.map(|role| role.as_str().to_string());
+        let match_all_tags = normalize_tags(filter.match_all_tags);
+        let match_any_tags = normalize_tags(filter.match_any_tags);
 
-        let row: Option<TaskRow> = match (task_kind.as_deref(), executor_role.as_deref()) {
-            (Some(kind), Some(role)) => {
-                sqlx::query_as(
-                    r#"
-                    SELECT * FROM tasks
-                    WHERE status = 'READY'
-                      AND metadata->>'task_kind' = $1
-                      AND metadata->>'executor_role' = $2
-                    ORDER BY topological_level ASC, created_at ASC
-                    FOR UPDATE SKIP LOCKED
-                    LIMIT 1
-                    "#,
-                )
-                .bind(kind)
-                .bind(role)
-                .fetch_optional(&mut *tx)
-                .await?
-            }
-            (Some(kind), None) => {
-                sqlx::query_as(
-                    r#"
-                    SELECT * FROM tasks
-                    WHERE status = 'READY'
-                      AND metadata->>'task_kind' = $1
-                    ORDER BY topological_level ASC, created_at ASC
-                    FOR UPDATE SKIP LOCKED
-                    LIMIT 1
-                    "#,
-                )
-                .bind(kind)
-                .fetch_optional(&mut *tx)
-                .await?
-            }
-            (None, Some(role)) => {
-                sqlx::query_as(
-                    r#"
-                    SELECT * FROM tasks
-                    WHERE status = 'READY'
-                      AND metadata->>'executor_role' = $1
-                    ORDER BY topological_level ASC, created_at ASC
-                    FOR UPDATE SKIP LOCKED
-                    LIMIT 1
-                    "#,
-                )
-                .bind(role)
-                .fetch_optional(&mut *tx)
-                .await?
-            }
-            (None, None) => {
-                sqlx::query_as(
-                    r#"
-                    SELECT * FROM tasks
-                    WHERE status = 'READY'
-                    ORDER BY topological_level ASC, created_at ASC
-                    FOR UPDATE SKIP LOCKED
-                    LIMIT 1
-                    "#,
-                )
-                .fetch_optional(&mut *tx)
-                .await?
-            }
-        };
+        let row: Option<TaskRow> = sqlx::query_as(
+            r#"
+            SELECT * FROM tasks
+            WHERE status = 'READY'
+              AND ($1::text[] IS NULL OR COALESCE(metadata->'tags', '[]'::jsonb) ?& $1)
+              AND ($2::text[] IS NULL OR COALESCE(metadata->'tags', '[]'::jsonb) ?| $2)
+              AND ($3::text IS NULL OR metadata->>'task_kind' = $3)
+              AND ($4::text IS NULL OR metadata->>'executor_role' = $4)
+            ORDER BY topological_level ASC, created_at ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+            "#,
+        )
+        .bind(optional_text_array(&match_all_tags))
+        .bind(optional_text_array(&match_any_tags))
+        .bind(task_kind)
+        .bind(executor_role)
+        .fetch_optional(&mut *tx)
+        .await?;
 
         let Some(row) = row else {
             tx.commit().await?;
@@ -1237,6 +1217,30 @@ impl<'a> TaskRepository<'a> {
                 .bind(status)
                 .fetch_all(self.pool)
                 .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn list_ready_by_tags(
+        &self,
+        match_all_tags: Vec<String>,
+        match_any_tags: Vec<String>,
+    ) -> sqlx::Result<Vec<Task>> {
+        let match_all_tags = normalize_tags(match_all_tags);
+        let match_any_tags = normalize_tags(match_any_tags);
+        let rows: Vec<TaskRow> = sqlx::query_as(
+            r#"
+            SELECT * FROM tasks
+            WHERE status = 'READY'
+              AND ($1::text[] IS NULL OR COALESCE(metadata->'tags', '[]'::jsonb) ?& $1)
+              AND ($2::text[] IS NULL OR COALESCE(metadata->'tags', '[]'::jsonb) ?| $2)
+            ORDER BY topological_level ASC, created_at ASC
+            "#,
+        )
+        .bind(optional_text_array(&match_all_tags))
+        .bind(optional_text_array(&match_any_tags))
+        .fetch_all(self.pool)
+        .await?;
 
         Ok(rows.into_iter().map(Into::into).collect())
     }

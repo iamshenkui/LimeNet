@@ -131,6 +131,8 @@ pub struct ArtifactRefs {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TaskMetadata {
     #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
     pub task_kind: Option<TaskKind>,
     #[serde(default)]
     pub executor_role: Option<ExecutorRole>,
@@ -210,6 +212,10 @@ pub struct ClaimRequest {
     pub agent_id: String,
     #[serde(default)]
     pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub match_all_tags: Vec<String>,
+    #[serde(default)]
+    pub match_any_tags: Vec<String>,
     #[serde(default)]
     pub task_kind: Option<TaskKind>,
     #[serde(default)]

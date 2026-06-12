@@ -59,6 +59,44 @@ struct RunSummaryQuery {
     include_next: bool,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct ReadyTasksQuery {
+    #[serde(default, deserialize_with = "deserialize_query_tags")]
+    match_all_tags: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_query_tags")]
+    match_any_tags: Vec<String>,
+}
+
+fn deserialize_query_tags<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Tags {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    let tags = Option::<Tags>::deserialize(deserializer)?;
+    let values = match tags {
+        Some(Tags::One(value)) => vec![value],
+        Some(Tags::Many(values)) => values,
+        None => Vec::new(),
+    };
+    Ok(values
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|tag| !tag.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect())
+}
+
 async fn list_graph_tasks(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let repo = TaskRepository::new(&state.pool);
     match repo.list_graph_tasks().await {
@@ -601,6 +639,8 @@ async fn claim_task(
             &request.agent_id,
             expires_at,
             ClaimFilter {
+                match_all_tags: request.match_all_tags,
+                match_any_tags: request.match_any_tags,
                 task_kind: request.task_kind,
                 executor_role: request.executor_role,
             },
@@ -609,6 +649,24 @@ async fn claim_task(
     {
         Ok(Some(task)) => (StatusCode::OK, Json(task)).into_response(),
         Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn list_ready_tasks(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ReadyTasksQuery>,
+) -> impl IntoResponse {
+    let repo = TaskRepository::new(&state.pool);
+    match repo
+        .list_ready_by_tags(query.match_all_tags, query.match_any_tags)
+        .await
+    {
+        Ok(tasks) => (StatusCode::OK, Json(json!({ "tasks": tasks }))).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -1114,6 +1172,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(get_graph_task).put(upsert_graph_task),
         )
         .route("/api/v1/tasks/batch", post(create_tasks_batch))
+        .route("/api/v1/tasks/ready", get(list_ready_tasks))
         .route("/api/v1/tasks/claim", post(claim_task))
         .route("/api/v1/tasks/{task_id}/heartbeat", post(heartbeat_task))
         .route("/api/v1/tasks/{task_id}/submit", post(submit_task))
