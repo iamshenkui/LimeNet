@@ -297,8 +297,10 @@ Response:
       "validation_script": "cargo test"
     },
     "metadata": {
-      "task_kind": "implementation",
-      "executor_role": "meta-agent",
+      "tags": [
+        "portolan.work.implementation",
+        "portolan.stage.implementation_full"
+      ],
       "target_ref": {
         "repo": "owner/repo",
         "base_branch": "main",
@@ -330,12 +332,32 @@ Response:
 - 计算每个任务的 `topological_level`
 - 无父节点任务初始化为 `READY`
 - 其他任务初始化为 `PENDING`
-- `metadata` 是 JSONB；`task_kind`、`executor_role`、`target_ref`、`artifacts` 是可选治理字段，其他通用 metadata key 会原样保留
+- `metadata` 是 JSONB；`tags`、`target_ref`、`artifacts` 是可选治理字段，其他通用 metadata key 会原样保留
+- `task_kind`、`executor_role` 仍作为 supported-but-deprecated metadata 字段被服务端保留和解析，用于旧客户端兼容；新订阅实现应使用 `tags`
+- `metadata.tags` 是订阅筛选的协议级 tag，不应使用组件仓库名作为 dispatch key
 
 ### Response
 
 - `201 Created`: 返回创建的任务 ID 列表
 - `400 Bad Request`: 任务图存在循环依赖
+
+## `GET /api/v1/tasks/ready`
+
+返回当前 `READY` task snapshot，可按 tag 过滤。该接口用于 subscriber 启动补扫或 cursor 丢失后的恢复查询。
+
+### Query
+
+```text
+GET /api/v1/tasks/ready?match_all_tags=portolan.work.code_review&match_any_tags=portolan.stage.pre_merge,portolan.artifact.test_evidence
+```
+
+### Behavior
+
+- 仅返回 `READY` 任务
+- `match_all_tags` 中的 tag 必须全部存在
+- `match_any_tags` 中至少一个 tag 存在即可
+- tag 参数支持逗号分隔
+- LimeNet 只按 tag 做机械过滤，不解释 tag 的业务含义
 
 ## `POST /api/v1/tasks/claim`
 
@@ -347,16 +369,17 @@ Response:
 {
   "agent_id": "hermes-local-01",
   "capabilities": ["coding", "rust"],
-  "task_kind": "code_review",
-  "executor_role": "quartermaster"
+  "match_all_tags": ["portolan.work.code_review"],
+  "match_any_tags": ["portolan.stage.pre_merge"]
 }
 ```
 
 ### Behavior
 
 - 仅从 `READY` 任务池挑选
-- 如果传入 `task_kind`，仅申领 `metadata.task_kind` 匹配的任务
-- 如果传入 `executor_role`，仅申领 `metadata.executor_role` 匹配的任务
+- 如果传入 `match_all_tags`，仅申领包含全部 tag 的任务
+- 如果传入 `match_any_tags`，仅申领包含任一 tag 的任务
+- `task_kind`、`executor_role` 仅保留为旧兼容过滤字段，不作为目标订阅路由合同
 - 按 `topological_level ASC, created_at ASC` 排序
 - 使用 `FOR UPDATE SKIP LOCKED`
 - 成功后写入 15 分钟租约并转为 `IN_PROGRESS`

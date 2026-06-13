@@ -6,7 +6,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, QueryBuilder};
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -159,8 +159,46 @@ struct GovernanceArtifactRow {
 
 #[derive(Debug, Clone, Default)]
 pub struct ClaimFilter {
+    pub match_all_tags: Vec<String>,
+    pub match_any_tags: Vec<String>,
     pub task_kind: Option<TaskKind>,
     pub executor_role: Option<ExecutorRole>,
+}
+
+fn normalize_tags(tags: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for tag in tags {
+        let tag = tag.trim().to_string();
+        if !tag.is_empty() && !normalized.contains(&tag) {
+            normalized.push(tag);
+        }
+    }
+    normalized
+}
+
+fn push_ready_task_filters<'a>(
+    query: &mut QueryBuilder<'a, Postgres>,
+    match_all_tags: &'a [String],
+    match_any_tags: &'a [String],
+    task_kind: Option<&'a str>,
+    executor_role: Option<&'a str>,
+) {
+    if !match_all_tags.is_empty() {
+        query.push(" AND COALESCE(metadata->'tags', '[]'::jsonb) ?& ");
+        query.push_bind(match_all_tags);
+    }
+    if !match_any_tags.is_empty() {
+        query.push(" AND COALESCE(metadata->'tags', '[]'::jsonb) ?| ");
+        query.push_bind(match_any_tags);
+    }
+    if let Some(task_kind) = task_kind {
+        query.push(" AND metadata->>'task_kind' = ");
+        query.push_bind(task_kind);
+    }
+    if let Some(executor_role) = executor_role {
+        query.push(" AND metadata->>'executor_role' = ");
+        query.push_bind(executor_role);
+    }
 }
 
 #[derive(Debug)]
@@ -1119,69 +1157,21 @@ impl<'a> TaskRepository<'a> {
         let mut tx = self.pool.begin().await?;
         let task_kind = filter.task_kind.map(|kind| kind.as_str().to_string());
         let executor_role = filter.executor_role.map(|role| role.as_str().to_string());
+        let match_all_tags = normalize_tags(filter.match_all_tags);
+        let match_any_tags = normalize_tags(filter.match_any_tags);
 
-        let row: Option<TaskRow> = match (task_kind.as_deref(), executor_role.as_deref()) {
-            (Some(kind), Some(role)) => {
-                sqlx::query_as(
-                    r#"
-                    SELECT * FROM tasks
-                    WHERE status = 'READY'
-                      AND metadata->>'task_kind' = $1
-                      AND metadata->>'executor_role' = $2
-                    ORDER BY topological_level ASC, created_at ASC
-                    FOR UPDATE SKIP LOCKED
-                    LIMIT 1
-                    "#,
-                )
-                .bind(kind)
-                .bind(role)
-                .fetch_optional(&mut *tx)
-                .await?
-            }
-            (Some(kind), None) => {
-                sqlx::query_as(
-                    r#"
-                    SELECT * FROM tasks
-                    WHERE status = 'READY'
-                      AND metadata->>'task_kind' = $1
-                    ORDER BY topological_level ASC, created_at ASC
-                    FOR UPDATE SKIP LOCKED
-                    LIMIT 1
-                    "#,
-                )
-                .bind(kind)
-                .fetch_optional(&mut *tx)
-                .await?
-            }
-            (None, Some(role)) => {
-                sqlx::query_as(
-                    r#"
-                    SELECT * FROM tasks
-                    WHERE status = 'READY'
-                      AND metadata->>'executor_role' = $1
-                    ORDER BY topological_level ASC, created_at ASC
-                    FOR UPDATE SKIP LOCKED
-                    LIMIT 1
-                    "#,
-                )
-                .bind(role)
-                .fetch_optional(&mut *tx)
-                .await?
-            }
-            (None, None) => {
-                sqlx::query_as(
-                    r#"
-                    SELECT * FROM tasks
-                    WHERE status = 'READY'
-                    ORDER BY topological_level ASC, created_at ASC
-                    FOR UPDATE SKIP LOCKED
-                    LIMIT 1
-                    "#,
-                )
-                .fetch_optional(&mut *tx)
-                .await?
-            }
-        };
+        let mut query = QueryBuilder::new("SELECT * FROM tasks WHERE status = 'READY'");
+        push_ready_task_filters(
+            &mut query,
+            &match_all_tags,
+            &match_any_tags,
+            task_kind.as_deref(),
+            executor_role.as_deref(),
+        );
+        query.push(
+            " ORDER BY topological_level ASC, created_at ASC FOR UPDATE SKIP LOCKED LIMIT 1",
+        );
+        let row: Option<TaskRow> = query.build_query_as().fetch_optional(&mut *tx).await?;
 
         let Some(row) = row else {
             tx.commit().await?;
@@ -1237,6 +1227,21 @@ impl<'a> TaskRepository<'a> {
                 .bind(status)
                 .fetch_all(self.pool)
                 .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn list_ready_by_tags(
+        &self,
+        match_all_tags: Vec<String>,
+        match_any_tags: Vec<String>,
+    ) -> sqlx::Result<Vec<Task>> {
+        let match_all_tags = normalize_tags(match_all_tags);
+        let match_any_tags = normalize_tags(match_any_tags);
+        let mut query = QueryBuilder::new("SELECT * FROM tasks WHERE status = 'READY'");
+        push_ready_task_filters(&mut query, &match_all_tags, &match_any_tags, None, None);
+        query.push(" ORDER BY topological_level ASC, created_at ASC");
+        let rows: Vec<TaskRow> = query.build_query_as().fetch_all(self.pool).await?;
 
         Ok(rows.into_iter().map(Into::into).collect())
     }
@@ -2168,6 +2173,8 @@ mod tests {
                 "meta-agent-1",
                 Utc::now() + chrono::Duration::minutes(5),
                 ClaimFilter {
+                    match_all_tags: vec![],
+                    match_any_tags: vec![],
                     task_kind: Some(TaskKind::CodeReview),
                     executor_role: Some(ExecutorRole::MetaAgent),
                 },
@@ -2181,6 +2188,8 @@ mod tests {
                 "quartermaster-1",
                 Utc::now() + chrono::Duration::minutes(5),
                 ClaimFilter {
+                    match_all_tags: vec![],
+                    match_any_tags: vec![],
                     task_kind: Some(TaskKind::CodeReview),
                     executor_role: Some(ExecutorRole::Quartermaster),
                 },
