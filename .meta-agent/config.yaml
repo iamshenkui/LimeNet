@@ -17,6 +17,15 @@ opensandbox:
   attempt_remote: origin
   attempt_branch_prefix: meta-agent/attempt
 
+pull_requests:
+  enabled: true
+  repository: iamshenkui/portolan
+  base_branch: main
+  labels: []
+  reviewers: []
+  draft: false
+  close_linked_issues: false
+
 limenet:
   base_url: http://127.0.0.1:3587
   instance_profile: local
